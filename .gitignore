@@ -1,0 +1,7 @@
+.env
+lamp-test.wav
+lamp-test-result.json
+full-test-report.json
+__pycache__/
+*.py[cod]
+.pytest_cache/

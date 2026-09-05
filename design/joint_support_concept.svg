@@ -1,0 +1,75 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="860" viewBox="0 0 1600 860">
+  <defs>
+    <style>
+      .t{font-family:'Microsoft YaHei',Arial,sans-serif;fill:#263238}.h{font-family:'Microsoft YaHei',Arial,sans-serif;font-weight:700;fill:#172027}.s{font-family:'Microsoft YaHei',Arial,sans-serif;fill:#52636b}.small{font-size:22px}.mid{font-size:28px}.big{font-size:38px}.line{stroke:#263238;stroke-width:5;fill:none}.thin{stroke:#63747c;stroke-width:3;fill:none}.center{stroke:#df4a43;stroke-width:4;stroke-dasharray:14 10}.fixed{fill:#d8e0e3;stroke:#263238;stroke-width:5}.moving{fill:#e8d7bb;stroke:#263238;stroke-width:5}.motor{fill:#38474d;stroke:#172027;stroke-width:5}.pcb{fill:#4d9d75;stroke:#172027;stroke-width:4}.bearing{fill:#b8c3c8;stroke:#263238;stroke-width:5}.shaft{fill:#8b9ba0;stroke:#263238;stroke-width:5}.arrow{stroke:#df4a43;stroke-width:5;fill:none;marker-end:url(#a)}
+    </style>
+    <marker id="a" markerWidth="11" markerHeight="11" refX="9" refY="5.5" orient="auto"><path d="M0,0 L11,5.5 L0,11 z" fill="#df4a43"/></marker>
+  </defs>
+  <rect width="1600" height="860" fill="#fbfaf7"/>
+  <text x="800" y="65" text-anchor="middle" class="h big">J2 / J3 同轴中置闭环步进关节：侧向剖视概念</text>
+  <text x="800" y="105" text-anchor="middle" class="s mid">所有承载轴承在电机输出端（前方）；PCB 在尾部，只负责控制与走线。</text>
+
+  <!-- fixed housing -->
+  <path d="M105 300 H770 V560 H105 Z" class="fixed"/>
+  <path d="M130 322 H748 V538 H130 Z" fill="#fbfaf7" stroke="#63747c" stroke-width="3"/>
+  <text x="225" y="588" class="h mid">固定壳体 / 前一段连杆</text>
+
+  <!-- rear cover and pcb -->
+  <rect x="155" y="340" width="105" height="180" rx="12" fill="#59696e" stroke="#263238" stroke-width="5"/>
+  <rect x="178" y="365" width="58" height="130" rx="5" class="pcb"/>
+  <circle cx="192" cy="385" r="7" fill="#f1c34f"/><circle cx="220" cy="425" r="7" fill="#f1c34f"/><circle cx="192" cy="465" r="7" fill="#f1c34f"/>
+  <text x="207" y="275" text-anchor="middle" class="h mid">尾盖 + PCB</text>
+  <path d="M207 286 V330" class="thin"/>
+  <text x="68" y="722" class="s small">不在此侧布置轴承</text>
+  <path d="M210 700 C190 655 185 585 185 527" class="thin"/>
+
+  <!-- motor -->
+  <rect x="285" y="325" width="255" height="210" rx="16" class="motor"/>
+  <rect x="310" y="347" width="205" height="166" rx="8" fill="#4e6067" stroke="#172027" stroke-width="3"/>
+  <circle cx="505" cy="430" r="28" fill="#1e292e" stroke="#bcc8cc" stroke-width="4"/>
+  <text x="412" y="290" text-anchor="middle" class="h mid">NEMA17 + MKS SERVO42D</text>
+  <text x="412" y="565" text-anchor="middle" class="s small">定子固定在壳体；转子轴从前端输出</text>
+
+  <!-- coupler and shaft -->
+  <rect x="532" y="402" width="70" height="56" rx="8" fill="#d6a85c" stroke="#263238" stroke-width="5"/>
+  <rect x="584" y="416" width="410" height="28" rx="8" class="shaft"/>
+  <text x="570" y="382" text-anchor="middle" class="h small">刚性联轴器</text>
+
+  <!-- stationary bearing carrier -->
+  <path d="M650 290 H1080 V570 H650 Z" class="fixed"/>
+  <path d="M678 318 H1054 V542 H678 Z" fill="#fbfaf7" stroke="#63747c" stroke-width="3"/>
+  <text x="865" y="610" text-anchor="middle" class="h mid">固定承载套筒（属于前一段连杆）</text>
+
+  <!-- bearings drawn over carrier -->
+  <rect x="705" y="355" width="78" height="150" rx="5" class="bearing"/>
+  <rect x="725" y="375" width="38" height="110" fill="#fbfaf7" stroke="#263238" stroke-width="4"/>
+  <rect x="930" y="355" width="78" height="150" rx="5" class="bearing"/>
+  <rect x="950" y="375" width="38" height="110" fill="#fbfaf7" stroke="#263238" stroke-width="4"/>
+  <text x="744" y="335" text-anchor="middle" class="h small">承载轴承 A</text>
+  <text x="969" y="335" text-anchor="middle" class="h small">承载轴承 B</text>
+
+  <!-- rotating distal link/hub -->
+  <path d="M1025 300 H1190 L1370 225 H1480 V635 H1370 L1190 560 H1025 Z" class="moving"/>
+  <rect x="1005" y="390" width="85" height="80" rx="10" class="moving"/>
+  <text x="1285" y="695" text-anchor="middle" class="h mid">旋转连杆 / 下一段灯臂</text>
+  <text x="1285" y="730" text-anchor="middle" class="s small">由输出轴带动；不把弯矩压到电机内部轴承</text>
+
+  <!-- centerline -->
+  <path d="M85 430 H1515" class="center"/>
+  <text x="1500" y="415" text-anchor="end" class="s small" fill="#df4a43">关节旋转中心线</text>
+
+  <!-- force arrows -->
+  <path d="M1430 195 C1365 150 1300 142 1220 173" class="arrow"/>
+  <text x="1250" y="145" class="h small" fill="#df4a43">灯臂重量产生的倾覆力矩</text>
+  <path d="M740 655 V585" class="arrow"/>
+  <path d="M970 655 V585" class="arrow"/>
+  <text x="855" y="680" text-anchor="middle" class="h small" fill="#df4a43">两只前置轴承分担径向载荷与倾覆力矩</text>
+
+  <!-- legend -->
+  <rect x="95" y="765" width="1410" height="58" rx="12" fill="#eef1ef" stroke="#b2bec2" stroke-width="2"/>
+  <circle cx="135" cy="794" r="12" fill="#d8e0e3" stroke="#263238" stroke-width="2"/><text x="157" y="802" class="s small">固定件</text>
+  <circle cx="330" cy="794" r="12" fill="#e8d7bb" stroke="#263238" stroke-width="2"/><text x="352" y="802" class="s small">旋转件</text>
+  <circle cx="530" cy="794" r="12" fill="#b8c3c8" stroke="#263238" stroke-width="2"/><text x="552" y="802" class="s small">轴承</text>
+  <rect x="690" y="782" width="26" height="24" fill="#4d9d75" stroke="#263238" stroke-width="2"/><text x="728" y="802" class="s small">PCB（不承载）</text>
+  <text x="1125" y="802" class="h small">关键：</text><text x="1198" y="802" class="s small">轴承的外圈固定在壳体，内圈抱住输出轴；输出轴与电机轴同轴联接。</text>
+</svg>

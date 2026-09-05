@@ -1,0 +1,7 @@
+# Install Picamera2 from Raspberry Pi OS apt, not pip:
+# sudo apt install -y python3-picamera2 python3-opencv espeak-ng
+# Voice recognition, after a USB/I2S microphone is connected:
+# sudo apt install -y portaudio19-dev
+# python3 -m pip install vosk sounddevice
+# Download a small Chinese Vosk model to the VOSK_MODEL_PATH configured in .env.
+# This project intentionally has no mandatory pip dependency.

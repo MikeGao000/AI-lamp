@@ -87,6 +87,32 @@ python simulate_system.py camera
 python simulate_system.py estop
 ```
 
+## 自动找书与阅读动作演示
+
+以下命令使用虚拟摄像头位置、离线识别文本和五轴虚拟电机，完整运行“找到书 → 逐帧定位至画面中央 → 快照 → 识别 → 阅读姿态 → 朗读”流程。`--book-x` 是书本在初始画面中的归一化横向中心；例如 `0.18` 为左侧、`0.50` 为中间、`0.82` 为右侧。演示会根据每帧书本中心与 `0.50` 的误差，协同调整相机承载的五个关节、重新取图，直至误差不超过 `±0.04`。
+
+```powershell
+python simulate_book_reading_flow.py --book-x 0.18
+```
+
+当前阅读姿态使用已验证的五轴配置：J1=0.25、J2=-0.20、J3=0.30、J4=0.12、J5=-0.18 rad。该演示只驱动 `VirtualMotorBus`，用于验证互动流程和轨迹组织。
+
+对真实照片做“目标识别 → 二维居中规划”时，先在 `.env` 配置可用的视觉模型，然后运行：
+
+```powershell
+python simulate_detected_target_centering.py C:\Users\Bruger\Desktop\book_x015.jpeg C:\Users\Bruger\Desktop\book_x090.jpeg C:\Users\Bruger\Desktop\book_x0901.jpeg
+```
+
+该入口会请求模型返回目标框 `bbox_norm`，根据相机标定矩阵把二维误差分配给全部五个相机承载关节；后续位置变化仍由虚拟相机与 `VirtualMotorBus` 仿真，不调用真实电机。
+
+没有相机和本地模型时，可用已标注的真实样本运行 Pi 本地检测器的离线仿真：
+
+```powershell
+python simulate_local_target_centering.py C:\Users\Bruger\Desktop\book_x015.jpeg C:\Users\Bruger\Desktop\book_x020.jpeg C:\Users\Bruger\Desktop\book_x035.jpeg C:\Users\Bruger\Desktop\book_x050.jpeg C:\Users\Bruger\Desktop\book_x070.jpeg C:\Users\Bruger\Desktop\book_x090.jpeg C:\Users\Bruger\Desktop\book_x0901.jpeg
+```
+
+该测试使用人工标注的目标框模拟未来 Pi/OpenNI/TFLite 检测器输出，验证的是本地接口、二维位置误差与轨迹规划；它不宣称已经测得真实模型的识别率或帧率。
+
 ## 完整主程序
 
 电脑上的完整离线流程（模拟相机页、云端回复与五轴总线）：

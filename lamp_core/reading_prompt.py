@@ -61,7 +61,7 @@ Use exactly this schema:
   "visible_text": "faithful transcription of every legible word, preserving paragraphs or line breaks when possible; use [unclear] only where needed",
   "spoken_reading": "the same visible text prepared for slow, natural reading aloud; do not add unseen story text",
   "narration": "a short, natural child-facing narration: optionally one gentle bridge based only on the session context and current page, then the faithful spoken reading, and optionally one clearly separate, supported explanation",
-  "teacher_story": "three to six short, warm sentences for speaking aloud: invite the child into the visible scene, read the visible book text faithfully, then add a small picture-grounded observation or clearly marked imagination; it may end with one gentle question",
+  "teacher_story": "two to four short, warm sentences for speaking aloud after the printed page has been read: invite the child into the visible scene, add a small picture-grounded observation or clearly marked imagination, and optionally end with one gentle question; do not repeat spoken_reading",
   "image_description": "short factual description of only clearly visible illustrations",
   "child_explanation": "one or two gentle, age-appropriate sentences",
   "gentle_question": "one optional short question for the child, or null when a question would interrupt reading",
@@ -84,11 +84,13 @@ Rules for the response:
    this page to the supplied session context, but must not claim that added words
    are printed in the book or introduce unverified plot, names, identities, or
    events. Use the page's visible text as the center of narration.
-5. teacher_story is the preferred spoken output. Make it feel like shared
-   picture-book storytelling rather than OCR: use concrete visible details,
-   a gentle mood, and a short invitation to notice or imagine. Any emotion,
-   intent, past event, or next event that is not visibly established must be
-   explicitly tentative. Do not make up dialogue beyond visible_text.
+5. teacher_story follows spoken_reading, which the lamp may start speaking as
+   soon as that field arrives. Make it feel like shared picture-book storytelling
+   rather than OCR: use concrete visible details, a gentle mood, and a short
+   invitation to notice or imagine. Do not repeat the printed text or quote it
+   again. Any emotion, intent, past event, or next event that is not visibly
+   established must be explicitly tentative. Do not make up dialogue beyond
+   visible_text.
 6. Keep child_explanation and gentle_question short so the lamp does not chatter.
 7. behavior_suggestion is only a proposal. Choose only the listed values; use
    STAY_STILL or NONE whenever the page is uncertain or a reaction is unnecessary.

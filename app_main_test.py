@@ -17,7 +17,7 @@ from app_main import accept_page_jpeg, cloud_client
 from lamp_core.cloud import CloudVisionError
 from lamp_core.config import AppConfig, load_dotenv
 from lamp_core.coordinator import AppEvent, ReadingCompanionCoordinator
-from lamp_core.speech import WavFileSpeech
+from lamp_core.speech import OpenAITtsSpeech, OpenAIWavFileSpeech, WavFileSpeech
 from lamp_core.virtual_hardware import VirtualMotorBus
 from simulate_system import LIMITS
 
@@ -37,11 +37,12 @@ def run_image_hardware_substitution_test(
         raise ValueError("Image file is empty")
     wav_path.parent.mkdir(parents=True, exist_ok=True)
 
-    speaker = WavFileSpeech(wav_path, config.tts_voice)
+    speaker = create_test_speaker(config, wav_path)
     controller = ReadingCompanionCoordinator(LIMITS, VirtualMotorBus(LIMITS), speaker)
     controller.home()
     controller.handle(AppEvent.BOOK_MOVED)
     accepted_page = accept_page_jpeg(controller, cloud_client(config), config, jpeg)
+    speaker.finalize()
     result_json_path.parent.mkdir(parents=True, exist_ok=True)
     result_json_path.write_text(
         json.dumps(
@@ -49,6 +50,8 @@ def run_image_hardware_substitution_test(
                 "source_image": str(image_path),
                 "recognized_page": accepted_page.recognition,
                 "text_sent_to_tts": accepted_page.story_for_tts,
+                "tts_segments": accepted_page.speech_segments,
+                "timing_s": accepted_page.timing_s,
             },
             ensure_ascii=False,
             indent=2,
@@ -59,6 +62,28 @@ def run_image_hardware_substitution_test(
     print("\n".join(controller.log))
     print(f"WAV written: {wav_path}")
     print(f"Recognition result written: {result_json_path}")
+
+
+def create_test_speaker(config: AppConfig, wav_path: Path) -> WavFileSpeech | OpenAIWavFileSpeech:
+    """Use the same selected TTS provider, with WAV replacing physical playback."""
+
+    if config.tts_provider == "openai":
+        if not config.api_key:
+            raise RuntimeError("TTS_PROVIDER=openai requires OPENAI_API_KEY")
+        return OpenAIWavFileSpeech(
+            wav_path,
+            OpenAITtsSpeech(
+                config.api_key,
+                config.api_base_url,
+                config.tts_model,
+                config.openai_tts_voice,
+                config.tts_instructions,
+                config.tts_timeout_s,
+            ),
+        )
+    if config.tts_provider == "local":
+        return WavFileSpeech(wav_path, config.tts_voice)
+    raise RuntimeError("TTS_PROVIDER must be 'local' or 'openai'")
 
 
 if __name__ == "__main__":

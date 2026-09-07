@@ -8,15 +8,18 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 import time
 from dataclasses import dataclass
+from time import monotonic
+from typing import Callable
 
 from lamp_core.cloud import CloudVisionError, OpenAIResponsesVisionClient, StaticStoryClient, StoryClient
 from lamp_core.config import AppConfig, load_dotenv
 from lamp_core.coordinator import AppEvent, ReadingCompanionCoordinator
 from lamp_core.reading_prompt import PICTURE_BOOK_SYSTEM_INSTRUCTIONS, build_picture_book_prompt
-from lamp_core.speech import EspeakSpeech
+from lamp_core.speech import EspeakSpeech, OpenAITtsSpeech, QueuedSpeech, SpeechSink
 from lamp_core.vision import Picamera2FrameSource, StillnessGate
 from simulate_system import LIMITS
 from lamp_core.virtual_hardware import SpeechStub, VirtualMotorBus
@@ -29,6 +32,8 @@ class AcceptedPage:
     next_context: str | None
     story_for_tts: str
     recognition: dict | None
+    speech_segments: tuple[str, ...]
+    timing_s: dict[str, float]
 
 
 def cloud_client(config: AppConfig) -> StoryClient:
@@ -36,7 +41,14 @@ def cloud_client(config: AppConfig) -> StoryClient:
         return StaticStoryClient()
     if not config.api_key:
         raise RuntimeError("ENABLE_CLOUD_VISION=true requires OPENAI_API_KEY")
-    return OpenAIResponsesVisionClient(config.api_key, config.model, config.api_base_url)
+    return OpenAIResponsesVisionClient(
+        config.api_key,
+        config.model,
+        config.api_base_url,
+        stream=config.cloud_stream,
+        reasoning_effort=config.cloud_reasoning_effort,
+        max_output_tokens=config.cloud_max_output_tokens,
+    )
 
 
 def run_simulation(config: AppConfig) -> None:
@@ -58,7 +70,7 @@ def run_pi(config: AppConfig) -> None:
     """Validate camera/cloud/TTS flow on Pi while keeping motors simulated."""
     source = Picamera2FrameSource()
     gate = StillnessGate(config.still_seconds, config.motion_threshold)
-    speaker = EspeakSpeech(config.tts_voice)
+    speaker = QueuedSpeech(create_production_speaker(config))
     controller = ReadingCompanionCoordinator(LIMITS, VirtualMotorBus(LIMITS), speaker)
     client = cloud_client(config)
     previous_page_context: str | None = None
@@ -87,9 +99,31 @@ def run_pi(config: AppConfig) -> None:
         controller.handle(AppEvent.ESTOP)
     finally:
         source.close()
+        speaker.close()
+
+
+def create_production_speaker(config: AppConfig) -> SpeechSink:
+    """Choose the configured production playback adapter, never the test substitute."""
+
+    if config.tts_provider == "openai":
+        if not config.api_key:
+            raise RuntimeError("TTS_PROVIDER=openai requires OPENAI_API_KEY")
+        return OpenAITtsSpeech(
+            config.api_key,
+            config.api_base_url,
+            config.tts_model,
+            config.openai_tts_voice,
+            config.tts_instructions,
+            config.tts_timeout_s,
+        )
+    if config.tts_provider == "local":
+        return EspeakSpeech(config.tts_voice)
+    raise RuntimeError("TTS_PROVIDER must be 'local' or 'openai'")
 
 
 def _language_for_voice(voice: str) -> str:
+    """Legacy helper retained for existing prompt tests and local voice aliases."""
+
     return {"da": "Danish", "zh": "Chinese", "cmn": "Chinese", "en": "English"}.get(
         voice.lower(), voice
     )
@@ -109,25 +143,43 @@ def accept_page_jpeg(
     receive the same accepted page in either case.
     """
 
+    started = monotonic()
+    early_speech = StreamingReadingStarter(controller.speaker) if config.cloud_enabled and config.cloud_stream else None
     if config.cloud_enabled:
         page = read_picture_book_page(
             client,
             jpeg,
-            _language_for_voice(config.tts_voice),
+            config.reading_language,
             previous_page_context=previous_page_context,
+            on_output_text_delta=early_speech.feed if early_speech is not None else None,
         )
-        story = page.get("teacher_story") or page.get("narration") or page["spoken_reading"]
+        extension = page.get("teacher_story") or page.get("narration") or page["spoken_reading"]
+        speech_segments = ((early_speech.spoken_reading,) if early_speech and early_speech.spoken_reading else ()) + (extension,)
+        story = extension
         next_context = page_context_for_next_page(page)
         print("Picture-book page accepted:", page["confidence"])
         print("Recognized visible text:\n" + page.get("visible_text", "[no legible text returned]"))
     else:
         story = client.describe_page(jpeg)
+        speech_segments = (story,)
         next_context = None
         page = None
     controller.set_pending_story(story)
-    print("Narration to TTS:", story)
+    elapsed = monotonic() - started
+    timing_s = {"page_complete": round(elapsed, 3)}
+    if early_speech and early_speech.started_after_s is not None:
+        timing_s["spoken_reading_queued"] = round(early_speech.started_after_s, 3)
+    print("TTS segments:", len(speech_segments))
+    print("Narration to TTS:", " ".join(speech_segments))
+    print("Vision timing:", timing_s)
     controller.handle(AppEvent.BOOK_STILL)
-    return AcceptedPage(next_context=next_context, story_for_tts=story, recognition=page)
+    return AcceptedPage(
+        next_context=next_context,
+        story_for_tts=" ".join(speech_segments),
+        recognition=page,
+        speech_segments=speech_segments,
+        timing_s=timing_s,
+    )
 
 
 def read_picture_book_page(
@@ -136,12 +188,14 @@ def read_picture_book_page(
     reply_language: str,
     age_range: str = "3-7",
     previous_page_context: str | None = None,
+    on_output_text_delta: Callable[[str], None] | None = None,
 ) -> dict:
     """Ask for one structured, safe page interpretation; never execute its behavior hint."""
     raw = client.describe_page(
         jpeg,
         prompt=build_picture_book_prompt(reply_language, age_range, previous_page_context),
         system_instructions=PICTURE_BOOK_SYSTEM_INSTRUCTIONS,
+        on_output_text_delta=on_output_text_delta,
     )
     try:
         page = json.loads(raw)
@@ -150,6 +204,35 @@ def read_picture_book_page(
     if not isinstance(page, dict) or not isinstance(page.get("spoken_reading"), str):
         raise CloudVisionError("picture-book model response lacked spoken_reading")
     return page
+
+
+class StreamingReadingStarter:
+    """Queue the printed page text as soon as its JSON field completes in a stream."""
+
+    _SPOKEN_READING = re.compile(r'"spoken_reading"\s*:\s*"((?:\\.|[^"\\])*)"', re.DOTALL)
+
+    def __init__(self, speaker: SpeechSink) -> None:
+        self._speaker = speaker
+        self._buffer = ""
+        self.spoken_reading: str | None = None
+        self._started = monotonic()
+        self.started_after_s: float | None = None
+
+    def feed(self, delta: str) -> None:
+        if self.spoken_reading is not None:
+            return
+        self._buffer += delta
+        match = self._SPOKEN_READING.search(self._buffer)
+        if match is None:
+            return
+        try:
+            spoken_reading = json.loads(f'"{match.group(1)}"').strip()
+        except json.JSONDecodeError:
+            return
+        if spoken_reading:
+            self.spoken_reading = spoken_reading
+            self.started_after_s = monotonic() - self._started
+            self._speaker.speak(spoken_reading)
 
 
 def page_context_for_next_page(page: dict) -> str:

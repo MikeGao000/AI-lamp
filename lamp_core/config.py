@@ -35,6 +35,15 @@ class AppConfig:
     still_seconds: float
     motion_threshold: float
     tts_voice: str
+    tts_provider: str
+    tts_model: str
+    openai_tts_voice: str
+    tts_instructions: str
+    tts_timeout_s: float
+    reading_language: str
+    cloud_stream: bool
+    cloud_reasoning_effort: str
+    cloud_max_output_tokens: int
 
     @classmethod
     def from_environment(cls) -> "AppConfig":
@@ -46,4 +55,17 @@ class AppConfig:
             still_seconds=float(os.getenv("CAMERA_STILL_SECONDS", "1.5")),
             motion_threshold=float(os.getenv("CAMERA_MOTION_THRESHOLD", "8.0")),
             tts_voice=os.getenv("TTS_VOICE", "da"),
+            tts_provider=os.getenv("TTS_PROVIDER", "local").strip().lower(),
+            tts_model=os.getenv("TTS_MODEL", "gpt-4o-mini-tts"),
+            openai_tts_voice=os.getenv("OPENAI_TTS_VOICE", "marin"),
+            tts_instructions=os.getenv(
+                "TTS_INSTRUCTIONS",
+                "Speak warmly and naturally to a young child. Match the language of the text. "
+                "Use a gentle picture-book storytelling pace.",
+            ),
+            tts_timeout_s=float(os.getenv("TTS_TIMEOUT_SECONDS", "30")),
+            reading_language=os.getenv("READING_LANGUAGE", "Danish"),
+            cloud_stream=_bool(os.getenv("CLOUD_STREAM", "true")),
+            cloud_reasoning_effort=os.getenv("CLOUD_REASONING_EFFORT", "none"),
+            cloud_max_output_tokens=int(os.getenv("CLOUD_MAX_OUTPUT_TOKENS", "700")),
         )

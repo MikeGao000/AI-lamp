@@ -29,7 +29,11 @@ from simulate_system import LIMITS
 
 
 def run_image_hardware_substitution_test(
-    config: AppConfig, image_path: Path, wav_path: Path, result_json_path: Path
+    config: AppConfig,
+    image_path: Path,
+    wav_path: Path,
+    result_json_path: Path,
+    previous_page_context: str | None = None,
 ) -> None:
     """Run an image through the production app path with camera/speaker substituted."""
 
@@ -47,7 +51,13 @@ def run_image_hardware_substitution_test(
     controller = ReadingCompanionCoordinator(LIMITS, VirtualMotorBus(LIMITS), speaker)
     controller.home()
     controller.handle(AppEvent.BOOK_MOVED)
-    accepted_page = accept_page_jpeg(controller, cloud_client(config), config, jpeg)
+    accepted_page = accept_page_jpeg(
+        controller,
+        cloud_client(config),
+        config,
+        jpeg,
+        previous_page_context=previous_page_context,
+    )
     speaker.finalize()
     result_json_path.parent.mkdir(parents=True, exist_ok=True)
     result_json_path.write_text(
@@ -120,11 +130,19 @@ if __name__ == "__main__":
         default=Path("lamp-test-result.json"),
         help="JSON file containing recognized text and the exact text sent to TTS",
     )
+    parser.add_argument(
+        "--previous-page-context",
+        help="Test-only accepted prior-page context; never substitutes for a live camera page.",
+    )
     args = parser.parse_args()
     load_dotenv()
     try:
         run_image_hardware_substitution_test(
-            AppConfig.from_environment(), args.image, args.wav, args.result_json
+            AppConfig.from_environment(),
+            args.image,
+            args.wav,
+            args.result_json,
+            args.previous_page_context,
         )
     except CloudVisionError as error:
         # The test uses the production cloud client but should report a concise,

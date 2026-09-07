@@ -33,7 +33,7 @@ does not execute movement, lighting, or speech.
 
 def build_picture_book_prompt(
     reply_language: str,
-    child_age_range: str = "3-7",
+    child_age_range: str = "about 2 years old",
     previous_page_context: str | None = None,
 ) -> str:
     """Build the user-level request for one stable picture-book page."""
@@ -61,7 +61,7 @@ Use exactly this schema:
   "visible_text": "faithful transcription of every legible word, preserving paragraphs or line breaks when possible; use [unclear] only where needed",
   "spoken_reading": "the same visible text prepared for slow, natural reading aloud; do not add unseen story text",
   "narration": "a short, natural child-facing narration: optionally one gentle bridge based only on the session context and current page, then the faithful spoken reading, and optionally one clearly separate, supported explanation",
-  "teacher_story": "two to four short, warm sentences for speaking aloud after the printed page has been read: invite the child into the visible scene, add a small picture-grounded observation or clearly marked imagination, and optionally end with one gentle question; do not repeat spoken_reading",
+  "teacher_story": "a warm, simple teacher-style mini-story for speaking aloud after the printed page has been read: target about 45-65 short words in alphabetic languages (about 150-200 Chinese characters when replying in Chinese); invite the child into the visible scene, use only familiar two-year-old vocabulary, add one picture-grounded observation or clearly marked imagination, and optionally end with one gentle question; do not repeat spoken_reading",
   "image_description": "short factual description of only clearly visible illustrations",
   "child_explanation": "one or two gentle, age-appropriate sentences",
   "gentle_question": "one optional short question for the child, or null when a question would interrupt reading",
@@ -86,11 +86,18 @@ Rules for the response:
    events. Use the page's visible text as the center of narration.
 5. teacher_story follows spoken_reading, which the lamp may start speaking as
    soon as that field arrives. Make it feel like shared picture-book storytelling
-   rather than OCR: use concrete visible details, a gentle mood, and a short
-   invitation to notice or imagine. Do not repeat the printed text or quote it
-   again. Any emotion, intent, past event, or next event that is not visibly
-   established must be explicitly tentative. Do not make up dialogue beyond
-   visible_text.
+   rather than OCR. Write four to six very short sentences using concrete,
+   familiar words a two-year-old can understand. Aim for 45-65 words in
+   alphabetic reply languages, or about 150-200 Chinese characters for Chinese.
+   Use simple repetitions only when they make the story soothing or playful.
+   Add one or two concrete visible details, a gentle mood, and a short invitation
+   to notice or imagine. If the supplied preceding-page context contains a
+   directly relevant, already established detail, you may make at most one natural
+   callback (for example, "We can still see the moon"); otherwise omit a callback.
+   Never imply that a context detail is visible now when it is not. Do not repeat
+   the printed text or quote it again. Any emotion, intent, past event, or next
+   event that is not visibly established must be explicitly tentative. Do not make
+   up dialogue beyond visible_text.
 6. Keep child_explanation and gentle_question short so the lamp does not chatter.
 7. behavior_suggestion is only a proposal. Choose only the listed values; use
    STAY_STILL or NONE whenever the page is uncertain or a reaction is unnecessary.

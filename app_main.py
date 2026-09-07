@@ -218,7 +218,7 @@ def read_picture_book_page(
     client: StoryClient,
     jpeg: bytes,
     reply_language: str,
-    age_range: str = "3-7",
+    age_range: str = "about 2 years old",
     previous_page_context: str | None = None,
     on_output_text_delta: Callable[[str], None] | None = None,
 ) -> dict:

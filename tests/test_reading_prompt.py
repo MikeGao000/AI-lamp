@@ -13,6 +13,10 @@ class ReadingPromptTests(unittest.TestCase):
         self.assertIn("teacher_story", prompt)
         self.assertIn("Previous page: a bear says goodnight.", prompt)
         self.assertIn("READING_POSTURE, GENTLE_NOD, STAY_STILL, or NONE", prompt)
+        self.assertIn("45-65 words", prompt)
+        self.assertIn("150-200 Chinese characters", prompt)
+        self.assertIn("directly relevant", prompt)
+        self.assertIn("about 2 years old", build_picture_book_prompt("Danish"))
 
     def test_system_prompt_keeps_hardware_out_of_model_output(self):
         self.assertIn("Never output joint angles", PICTURE_BOOK_SYSTEM_INSTRUCTIONS)

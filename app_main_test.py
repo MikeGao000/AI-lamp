@@ -14,6 +14,7 @@ import sys
 from pathlib import Path
 
 from app_main import accept_page_jpeg, cloud_client
+from lamp_core.cloud import CloudVisionError
 from lamp_core.config import AppConfig, load_dotenv
 from lamp_core.coordinator import AppEvent, ReadingCompanionCoordinator
 from lamp_core.speech import WavFileSpeech
@@ -74,6 +75,12 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
     load_dotenv()
-    run_image_hardware_substitution_test(
-        AppConfig.from_environment(), args.image, args.wav, args.result_json
-    )
+    try:
+        run_image_hardware_substitution_test(
+            AppConfig.from_environment(), args.image, args.wav, args.result_json
+        )
+    except CloudVisionError as error:
+        # The test uses the production cloud client but should report a concise,
+        # actionable failure rather than a Python traceback.
+        print(f"CLOUD VISION TEST FAILED: {error}", file=sys.stderr)
+        raise SystemExit(2) from error

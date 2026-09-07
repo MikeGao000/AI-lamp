@@ -62,10 +62,14 @@ class AppConfig:
             openai_tts_voice=os.getenv("OPENAI_TTS_VOICE", "marin"),
             tts_instructions=os.getenv(
                 "TTS_INSTRUCTIONS",
-                "Speak like a warm, skilled kindergarten teacher sharing a picture book. "
-                "Use gentle expressive melody, short natural pauses, and a lively sense of wonder. "
-                "Sound affectionate and engaged, never rushed, flat, theatrical, or sing-song. "
-                "Emphasize tenderness, surprise, and questions naturally. Match the language of the text.",
+                "You are a beloved, experienced kindergarten teacher reading a picture book to one child. "
+                "Sound close, calm, affectionate, and genuinely interested in the story, never like an announcer "
+                "or a synthetic narrator. Speak about fifteen percent slower than everyday adult conversation. "
+                "Let important images, tender moments, surprises, and questions breathe with small natural pauses. "
+                "Use gentle changes in melody and warmth that follow the meaning, with a soft smile in happy moments "
+                "and quiet wonder in magical moments. Keep the delivery conversational rather than sing-song, theatrical, "
+                "flat, rushed, or over-enunciated. Preserve the language and words supplied to you exactly; do not translate, "
+                "add explanations, or invent extra story content.",
             ),
             tts_speed=float(os.getenv("TTS_SPEED", "0.94")),
             tts_timeout_s=float(os.getenv("TTS_TIMEOUT_SECONDS", "30")),

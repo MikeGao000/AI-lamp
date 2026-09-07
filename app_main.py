@@ -18,6 +18,7 @@ from typing import Callable
 from lamp_core.cloud import CloudVisionError, OpenAIResponsesVisionClient, StaticStoryClient, StoryClient
 from lamp_core.config import AppConfig, load_dotenv
 from lamp_core.coordinator import AppEvent, ReadingCompanionCoordinator
+from lamp_core.question_prompt import CHILD_QUESTION_SYSTEM_INSTRUCTIONS, build_child_question_prompt
 from lamp_core.reading_prompt import PICTURE_BOOK_SYSTEM_INSTRUCTIONS, build_picture_book_prompt
 from lamp_core.speech import EspeakSpeech, OpenAITtsSpeech, QueuedSpeech, SpeechSink
 from lamp_core.vision import Picamera2FrameSource, StillnessGate
@@ -34,6 +35,14 @@ class AcceptedPage:
     recognition: dict | None
     speech_segments: tuple[str, ...]
     timing_s: dict[str, float]
+
+
+@dataclass(frozen=True)
+class ChildQuestionAnswer:
+    """A grounded answer that was queued on the same configured TTS voice."""
+
+    answer: str
+    recognition: dict
 
 
 def cloud_client(config: AppConfig) -> StoryClient:
@@ -205,6 +214,46 @@ def read_picture_book_page(
     if not isinstance(page, dict) or not isinstance(page.get("spoken_reading"), str):
         raise CloudVisionError("picture-book model response lacked spoken_reading")
     return page
+
+
+def answer_child_question(
+    client: StoryClient,
+    speaker: SpeechSink,
+    config: AppConfig,
+    jpeg: bytes,
+    question: str,
+    pointed_object: str | None = None,
+    accepted_page_context: str | None = None,
+    reply_language: str | None = None,
+) -> ChildQuestionAnswer:
+    """Answer one child question without moving the lamp or advancing the story.
+
+    Microphone transcription and pointing recognition are hardware adapters.  This
+    production function receives their normalized text hints so the camera-free
+    test harness and the future live hardware path share the exact same cloud,
+    safety, and speech behavior.
+    """
+
+    if not question.strip():
+        raise ValueError("child question must not be empty")
+    language = (reply_language or config.question_reply_language).strip()
+    raw = client.describe_page(
+        jpeg,
+        prompt=build_child_question_prompt(
+            question, language, pointed_object, accepted_page_context
+        ),
+        system_instructions=CHILD_QUESTION_SYSTEM_INSTRUCTIONS,
+    )
+    try:
+        result = json.loads(raw)
+    except json.JSONDecodeError as error:
+        raise CloudVisionError("child-question model response was not valid JSON") from error
+    answer = result.get("answer") if isinstance(result, dict) else None
+    if not isinstance(answer, str) or not answer.strip():
+        raise CloudVisionError("child-question model response lacked answer")
+    spoken_answer = answer.strip()
+    speaker.speak(spoken_answer)
+    return ChildQuestionAnswer(spoken_answer, result)
 
 
 class StreamingReadingStarter:

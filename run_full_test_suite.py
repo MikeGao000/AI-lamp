@@ -22,7 +22,13 @@ ROOT = Path(__file__).resolve().parent
 
 
 COMPONENT_TEST_PATTERNS: dict[str, tuple[str, ...]] = {
-    "reading": ("test_cloud.py", "test_openai_streaming_tts.py", "test_reading_prompt.py", "test_vision.py"),
+    "reading": (
+        "test_cloud.py",
+        "test_child_questions.py",
+        "test_openai_streaming_tts.py",
+        "test_reading_prompt.py",
+        "test_vision.py",
+    ),
     "safety": ("test_safety.py", "test_coordinator.py", "test_behavior.py", "test_smart_motion.py"),
     "motion": ("test_motion.py", "test_ideal_plant.py", "test_action_motion.py", "test_mechanicalarm_port.py"),
     "can": ("test_mks_can_protocol.py", "test_module_communication.py"),

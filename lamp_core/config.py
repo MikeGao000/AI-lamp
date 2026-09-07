@@ -42,6 +42,7 @@ class AppConfig:
     tts_speed: float
     tts_timeout_s: float
     reading_language: str
+    question_reply_language: str
     cloud_stream: bool
     cloud_reasoning_effort: str
     cloud_max_output_tokens: int
@@ -69,6 +70,7 @@ class AppConfig:
             tts_speed=float(os.getenv("TTS_SPEED", "0.94")),
             tts_timeout_s=float(os.getenv("TTS_TIMEOUT_SECONDS", "30")),
             reading_language=os.getenv("READING_LANGUAGE", "Danish"),
+            question_reply_language=os.getenv("QUESTION_REPLY_LANGUAGE", "Danish"),
             cloud_stream=_bool(os.getenv("CLOUD_STREAM", "true")),
             cloud_reasoning_effort=os.getenv("CLOUD_REASONING_EFFORT", "none"),
             cloud_max_output_tokens=int(os.getenv("CLOUD_MAX_OUTPUT_TOKENS", "700")),

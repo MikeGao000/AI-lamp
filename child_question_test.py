@@ -22,6 +22,7 @@ def run_child_question_substitution_test(
     question: str,
     pointed_object: str | None,
     reply_language: str | None,
+    follow_up: str | None,
     wav_path: Path,
     result_json_path: Path,
 ) -> None:
@@ -40,6 +41,18 @@ def run_child_question_substitution_test(
         pointed_object=pointed_object,
         reply_language=reply_language,
     )
+    turns = [result]
+    if follow_up:
+        turns.append(
+            answer_child_question(
+                cloud_client(config),
+                speaker,
+                config,
+                jpeg,
+                follow_up,
+                previous_turn=result.next_turn,
+            )
+        )
     speaker.finalize()
     result_json_path.write_text(
         json.dumps(
@@ -48,8 +61,9 @@ def run_child_question_substitution_test(
                 "question": question,
                 "pointed_object": pointed_object,
                 "requested_reply_language": reply_language or config.question_reply_language,
-                "answer": result.recognition,
-                "text_sent_to_tts": result.answer,
+                "turns": [
+                    {"answer": turn.recognition, "text_sent_to_tts": turn.answer} for turn in turns
+                ],
             },
             ensure_ascii=False,
             indent=2,
@@ -57,7 +71,8 @@ def run_child_question_substitution_test(
         encoding="utf-8",
     )
     print("Question:", question)
-    print("Answer to TTS:", result.answer)
+    for index, turn in enumerate(turns, start=1):
+        print(f"Answer {index} to TTS:", turn.answer)
     print(f"WAV written: {wav_path}")
     print(f"Result written: {result_json_path}")
 
@@ -68,6 +83,7 @@ if __name__ == "__main__":
     parser.add_argument("--question", default="这是什么？")
     parser.add_argument("--pointed-object", default="star")
     parser.add_argument("--reply-language", help="Override QUESTION_REPLY_LANGUAGE for this test")
+    parser.add_argument("--follow-up", help="Second utterance, e.g. a one-turn language request")
     parser.add_argument("--wav", type=Path, default=Path("child-question-test.wav"))
     parser.add_argument("--result-json", type=Path, default=Path("child-question-test-result.json"))
     args = parser.parse_args()
@@ -78,6 +94,7 @@ if __name__ == "__main__":
         args.question,
         args.pointed_object,
         args.reply_language,
+        args.follow_up,
         args.wav,
         args.result_json,
     )

@@ -18,7 +18,11 @@ from typing import Callable
 from lamp_core.cloud import CloudVisionError, OpenAIResponsesVisionClient, StaticStoryClient, StoryClient
 from lamp_core.config import AppConfig, load_dotenv
 from lamp_core.coordinator import AppEvent, ReadingCompanionCoordinator
-from lamp_core.question_prompt import CHILD_QUESTION_SYSTEM_INSTRUCTIONS, build_child_question_prompt
+from lamp_core.question_prompt import (
+    CHILD_QUESTION_SYSTEM_INSTRUCTIONS,
+    build_child_question_prompt,
+    detect_one_turn_reply_language,
+)
 from lamp_core.reading_prompt import PICTURE_BOOK_SYSTEM_INSTRUCTIONS, build_picture_book_prompt
 from lamp_core.speech import EspeakSpeech, OpenAITtsSpeech, QueuedSpeech, SpeechSink
 from lamp_core.vision import Picamera2FrameSource, StillnessGate
@@ -43,6 +47,14 @@ class ChildQuestionAnswer:
 
     answer: str
     recognition: dict
+    next_turn: "ChildQuestionTurn"
+
+
+@dataclass(frozen=True)
+class ChildQuestionTurn:
+    """Only the last grounded answer needed for a one-turn language rephrase."""
+
+    last_answer: str
 
 
 def cloud_client(config: AppConfig) -> StoryClient:
@@ -225,6 +237,7 @@ def answer_child_question(
     pointed_object: str | None = None,
     accepted_page_context: str | None = None,
     reply_language: str | None = None,
+    previous_turn: ChildQuestionTurn | None = None,
 ) -> ChildQuestionAnswer:
     """Answer one child question without moving the lamp or advancing the story.
 
@@ -236,11 +249,18 @@ def answer_child_question(
 
     if not question.strip():
         raise ValueError("child question must not be empty")
-    language = (reply_language or config.question_reply_language).strip()
+    requested_turn_language = detect_one_turn_reply_language(question)
+    language = (reply_language or requested_turn_language or config.question_reply_language).strip()
+    is_language_rephrase = requested_turn_language is not None and previous_turn is not None
     raw = client.describe_page(
         jpeg,
         prompt=build_child_question_prompt(
-            question, language, pointed_object, accepted_page_context
+            question,
+            language,
+            pointed_object,
+            accepted_page_context,
+            previous_answer=previous_turn.last_answer if previous_turn else None,
+            is_language_rephrase=is_language_rephrase,
         ),
         system_instructions=CHILD_QUESTION_SYSTEM_INSTRUCTIONS,
     )
@@ -253,7 +273,40 @@ def answer_child_question(
         raise CloudVisionError("child-question model response lacked answer")
     spoken_answer = answer.strip()
     speaker.speak(spoken_answer)
-    return ChildQuestionAnswer(spoken_answer, result)
+    return ChildQuestionAnswer(spoken_answer, result, ChildQuestionTurn(spoken_answer))
+
+
+@dataclass
+class ChildQuestionSession:
+    """Production session state for a page's spoken child questions."""
+
+    client: StoryClient
+    speaker: SpeechSink
+    config: AppConfig
+    previous_turn: ChildQuestionTurn | None = None
+
+    def ask(
+        self,
+        jpeg: bytes,
+        question: str,
+        pointed_object: str | None = None,
+        accepted_page_context: str | None = None,
+    ) -> ChildQuestionAnswer:
+        result = answer_child_question(
+            self.client,
+            self.speaker,
+            self.config,
+            jpeg,
+            question,
+            pointed_object,
+            accepted_page_context,
+            previous_turn=self.previous_turn,
+        )
+        self.previous_turn = result.next_turn
+        return result
+
+    def reset_for_new_page(self) -> None:
+        self.previous_turn = None
 
 
 class StreamingReadingStarter:

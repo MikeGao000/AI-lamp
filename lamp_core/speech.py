@@ -44,6 +44,7 @@ class OpenAITtsSpeech:
     model: str = "gpt-4o-mini-tts"
     voice: str = "marin"
     instructions: str | None = None
+    speed: float = 1.0
     timeout_s: float = 30.0
 
     def synthesize(self, text: str) -> bytes:
@@ -55,6 +56,7 @@ class OpenAITtsSpeech:
             "input": text,
             "response_format": "wav",
             "stream_format": "audio",
+            "speed": self.speed,
         }
         if self.instructions:
             payload["instructions"] = self.instructions

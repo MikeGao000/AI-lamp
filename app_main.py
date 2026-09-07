@@ -109,12 +109,13 @@ def create_production_speaker(config: AppConfig) -> SpeechSink:
         if not config.api_key:
             raise RuntimeError("TTS_PROVIDER=openai requires OPENAI_API_KEY")
         return OpenAITtsSpeech(
-            config.api_key,
-            config.api_base_url,
-            config.tts_model,
-            config.openai_tts_voice,
-            config.tts_instructions,
-            config.tts_timeout_s,
+            api_key=config.api_key,
+            base_url=config.api_base_url,
+            model=config.tts_model,
+            voice=config.openai_tts_voice,
+            instructions=config.tts_instructions,
+            speed=config.tts_speed,
+            timeout_s=config.tts_timeout_s,
         )
     if config.tts_provider == "local":
         return EspeakSpeech(config.tts_voice)

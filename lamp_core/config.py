@@ -39,6 +39,7 @@ class AppConfig:
     tts_model: str
     openai_tts_voice: str
     tts_instructions: str
+    tts_speed: float
     tts_timeout_s: float
     reading_language: str
     cloud_stream: bool
@@ -60,9 +61,12 @@ class AppConfig:
             openai_tts_voice=os.getenv("OPENAI_TTS_VOICE", "marin"),
             tts_instructions=os.getenv(
                 "TTS_INSTRUCTIONS",
-                "Speak warmly and naturally to a young child. Match the language of the text. "
-                "Use a gentle picture-book storytelling pace.",
+                "Speak like a warm, skilled kindergarten teacher sharing a picture book. "
+                "Use gentle expressive melody, short natural pauses, and a lively sense of wonder. "
+                "Sound affectionate and engaged, never rushed, flat, theatrical, or sing-song. "
+                "Emphasize tenderness, surprise, and questions naturally. Match the language of the text.",
             ),
+            tts_speed=float(os.getenv("TTS_SPEED", "0.94")),
             tts_timeout_s=float(os.getenv("TTS_TIMEOUT_SECONDS", "30")),
             reading_language=os.getenv("READING_LANGUAGE", "Danish"),
             cloud_stream=_bool(os.getenv("CLOUD_STREAM", "true")),

@@ -56,7 +56,7 @@ class OpenAIStreamingAndTtsTests(unittest.TestCase):
 
     def test_tts_posts_wav_request_with_selected_voice_and_instructions(self):
         client = OpenAITtsSpeech(
-            "test-key", voice="marin", instructions="Warm, calm Danish reading."
+            "test-key", voice="marin", instructions="Warm, calm Danish reading.", speed=0.94
         )
         with patch("lamp_core.speech.urlopen", return_value=FakeResponse(wav_bytes())) as request:
             audio = client.synthesize("Hej lille bjørn")
@@ -65,6 +65,7 @@ class OpenAIStreamingAndTtsTests(unittest.TestCase):
         self.assertEqual("gpt-4o-mini-tts", payload["model"])
         self.assertEqual("marin", payload["voice"])
         self.assertEqual("wav", payload["response_format"])
+        self.assertEqual(0.94, payload["speed"])
         self.assertEqual("Warm, calm Danish reading.", payload["instructions"])
 
     def test_combines_wav_with_streaming_unknown_data_size(self):

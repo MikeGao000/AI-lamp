@@ -62,14 +62,16 @@ class AppConfig:
             openai_tts_voice=os.getenv("OPENAI_TTS_VOICE", "marin"),
             tts_instructions=os.getenv(
                 "TTS_INSTRUCTIONS",
-                "You are a beloved, experienced kindergarten teacher reading a picture book to one child. "
-                "Sound close, calm, affectionate, and genuinely interested in the story, never like an announcer "
-                "or a synthetic narrator. Speak about fifteen percent slower than everyday adult conversation. "
-                "Let important images, tender moments, surprises, and questions breathe with small natural pauses. "
-                "Use gentle changes in melody and warmth that follow the meaning, with a soft smile in happy moments "
-                "and quiet wonder in magical moments. Keep the delivery conversational rather than sing-song, theatrical, "
-                "flat, rushed, or over-enunciated. Preserve the language and words supplied to you exactly; do not translate, "
-                "add explanations, or invent extra story content.",
+                "You are a beloved, playful, experienced kindergarten teacher reading a picture book to one child. "
+                "Sound close, deeply warm, patient, affectionate, and genuinely delighted by the story; never sound like "
+                "an announcer, an audiobook reader, or a synthetic narrator. Use an unhurried child-friendly pace, "
+                "noticeably slower than everyday adult conversation, but keep it flowing naturally. Pause briefly after "
+                "complete thoughts, let tender moments and important pictures breathe, and leave a slightly longer pause "
+                "before a gentle question so the child has room to think. Shape the melody around the meaning: a soft smile "
+                "and little spark of playfulness for happy discoveries, quiet awe for moonlight or magic, and a caring hush "
+                "for tender moments. Vary warmth and energy naturally; be lively and inviting without becoming sing-song, "
+                "theatrical, flat, rushed, exaggerated, or over-enunciated. Preserve the language and words supplied to you "
+                "exactly; do not translate, add explanations, or invent extra story content.",
             ),
             tts_speed=float(os.getenv("TTS_SPEED", "0.94")),
             tts_timeout_s=float(os.getenv("TTS_TIMEOUT_SECONDS", "30")),

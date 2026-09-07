@@ -92,6 +92,13 @@ class OpenAIResponsesVisionClient:
                 body = json.loads(response.read().decode("utf-8"))
         except HTTPError as error:
             raise CloudVisionError(f"cloud API returned HTTP {error.code}") from error
+        except TimeoutError as error:
+            # A response can time out after the request was accepted upstream.  Do
+            # not retry here: that could create two billable model requests.  The
+            # caller can safely wait for the next stable camera frame and try once.
+            raise CloudVisionError(
+                f"cloud API response timed out after {self.timeout_s:g}s; retry the page"
+            ) from error
         except URLError as error:
             raise CloudVisionError("cloud API is unavailable") from error
         return self._extract_text(body)

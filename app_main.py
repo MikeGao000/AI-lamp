@@ -70,11 +70,18 @@ def run_pi(config: AppConfig) -> None:
             if motion > config.motion_threshold:
                 controller.handle(AppEvent.BOOK_MOVED)
             if gate.observe(motion):
-                accepted_page = accept_page_jpeg(
-                    controller, client, config, jpeg, previous_page_context
-                )
-                previous_page_context = accepted_page.next_context
-                gate.reset()
+                try:
+                    accepted_page = accept_page_jpeg(
+                        controller, client, config, jpeg, previous_page_context
+                    )
+                except CloudVisionError as error:
+                    # A cloud response must never terminate the camera loop or
+                    # trigger motion.  Wait for the next stable frame instead.
+                    print(f"CLOUD VISION: {error}")
+                else:
+                    previous_page_context = accepted_page.next_context
+                finally:
+                    gate.reset()
             time.sleep(0.10)
     except KeyboardInterrupt:
         controller.handle(AppEvent.ESTOP)

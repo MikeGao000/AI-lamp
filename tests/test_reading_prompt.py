@@ -15,6 +15,8 @@ class ReadingPromptTests(unittest.TestCase):
         self.assertIn("READING_POSTURE, GENTLE_NOD, STAY_STILL, or NONE", prompt)
         self.assertIn("45-65 words", prompt)
         self.assertIn("150-200 Chinese characters", prompt)
+        self.assertIn("Length is a contract", prompt)
+        self.assertIn("include exactly one short, natural callback", prompt)
         self.assertIn("directly relevant", prompt)
         self.assertIn("about 2 years old", build_picture_book_prompt("Danish"))
 

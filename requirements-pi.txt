@@ -4,4 +4,6 @@
 # sudo apt install -y portaudio19-dev
 # python3 -m pip install vosk sounddevice
 # Download a small Chinese Vosk model to the VOSK_MODEL_PATH configured in .env.
-# This project intentionally has no mandatory pip dependency.
+# Realtime speech mode (for Debian/Raspberry Pi OS, prefer the system package):
+# sudo apt install -y python3-websocket
+# Or, inside a project virtual environment: python3 -m pip install websocket-client

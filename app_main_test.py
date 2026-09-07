@@ -17,7 +17,13 @@ from app_main import accept_page_jpeg, cloud_client
 from lamp_core.cloud import CloudVisionError
 from lamp_core.config import AppConfig, load_dotenv
 from lamp_core.coordinator import AppEvent, ReadingCompanionCoordinator
-from lamp_core.speech import OpenAITtsSpeech, OpenAIWavFileSpeech, WavFileSpeech
+from lamp_core.speech import (
+    OpenAIRealtimeSpeech,
+    OpenAIRealtimeWavFileSpeech,
+    OpenAITtsSpeech,
+    OpenAIWavFileSpeech,
+    WavFileSpeech,
+)
 from lamp_core.virtual_hardware import VirtualMotorBus
 from simulate_system import LIMITS
 
@@ -64,7 +70,9 @@ def run_image_hardware_substitution_test(
     print(f"Recognition result written: {result_json_path}")
 
 
-def create_test_speaker(config: AppConfig, wav_path: Path) -> WavFileSpeech | OpenAIWavFileSpeech:
+def create_test_speaker(
+    config: AppConfig, wav_path: Path
+) -> WavFileSpeech | OpenAIWavFileSpeech | OpenAIRealtimeWavFileSpeech:
     """Use the same selected TTS provider, with WAV replacing physical playback."""
 
     if config.tts_provider == "openai":
@@ -84,7 +92,20 @@ def create_test_speaker(config: AppConfig, wav_path: Path) -> WavFileSpeech | Op
         )
     if config.tts_provider == "local":
         return WavFileSpeech(wav_path, config.tts_voice)
-    raise RuntimeError("TTS_PROVIDER must be 'local' or 'openai'")
+    if config.tts_provider == "openai-realtime":
+        if not config.api_key:
+            raise RuntimeError("TTS_PROVIDER=openai-realtime requires OPENAI_API_KEY")
+        return OpenAIRealtimeWavFileSpeech(
+            wav_path,
+            OpenAIRealtimeSpeech(
+                api_key=config.api_key,
+                model=config.tts_model,
+                voice=config.openai_tts_voice,
+                instructions=config.tts_instructions,
+                timeout_s=config.tts_timeout_s,
+            ),
+        )
+    raise RuntimeError("TTS_PROVIDER must be 'local', 'openai', or 'openai-realtime'")
 
 
 if __name__ == "__main__":

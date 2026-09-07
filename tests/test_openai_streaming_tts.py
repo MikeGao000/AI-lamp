@@ -7,7 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from lamp_core.cloud import OpenAIResponsesVisionClient
-from lamp_core.speech import OpenAITtsSpeech, _combine_wav_files
+from lamp_core.speech import OpenAIRealtimeSpeech, OpenAITtsSpeech, _combine_wav_files
 
 
 def wav_bytes() -> bytes:
@@ -37,6 +37,22 @@ class FakeResponse:
     def __iter__(self):
         assert isinstance(self.body, list)
         return iter(self.body)
+
+
+class FakeRealtimeSocket:
+    def __init__(self, events: list[dict]) -> None:
+        self.events = list(events)
+        self.sent: list[dict] = []
+        self.closed = False
+
+    def send(self, payload: str) -> None:
+        self.sent.append(json.loads(payload))
+
+    def recv(self) -> str:
+        return json.dumps(self.events.pop(0))
+
+    def close(self) -> None:
+        self.closed = True
 
 
 class OpenAIStreamingAndTtsTests(unittest.TestCase):
@@ -82,3 +98,25 @@ class OpenAIStreamingAndTtsTests(unittest.TestCase):
             _combine_wav_files([first, second], output)
             with wave.open(str(output), "rb") as combined:
                 self.assertEqual(4, combined.getnframes())
+
+    def test_realtime_collects_pcm_deltas_as_a_wav(self):
+        socket = FakeRealtimeSocket(
+            [
+                {"type": "session.created"},
+                {"type": "session.updated"},
+                {"type": "response.output_audio.delta", "delta": "AQACAAMABAA="},
+                {"type": "response.done", "response": {"status": "completed"}},
+            ]
+        )
+        client = OpenAIRealtimeSpeech("test-key", instructions="Warm Danish teacher.")
+        with patch.object(client, "_connect", return_value=socket):
+            audio = client.synthesize("Hej lille bjørn")
+        with wave.open(io.BytesIO(audio), "rb") as output:
+            self.assertEqual(1, output.getnchannels())
+            self.assertEqual(24_000, output.getframerate())
+            self.assertEqual(b"\x01\x00\x02\x00\x03\x00\x04\x00", output.readframes(4))
+        self.assertTrue(socket.closed)
+        self.assertEqual("session.update", socket.sent[0]["type"])
+        self.assertEqual("marin", socket.sent[0]["session"]["audio"]["output"]["voice"])
+        self.assertIn("exactly", socket.sent[1]["item"]["content"][0]["text"])
+        self.assertEqual("response.create", socket.sent[2]["type"])

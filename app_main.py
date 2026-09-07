@@ -24,7 +24,7 @@ from lamp_core.question_prompt import (
     detect_one_turn_reply_language,
 )
 from lamp_core.reading_prompt import PICTURE_BOOK_SYSTEM_INSTRUCTIONS, build_picture_book_prompt
-from lamp_core.speech import EspeakSpeech, OpenAITtsSpeech, QueuedSpeech, SpeechSink
+from lamp_core.speech import EspeakSpeech, OpenAIRealtimeSpeech, OpenAITtsSpeech, QueuedSpeech, SpeechSink
 from lamp_core.vision import Picamera2FrameSource, StillnessGate
 from simulate_system import LIMITS
 from lamp_core.virtual_hardware import SpeechStub, VirtualMotorBus
@@ -138,9 +138,19 @@ def create_production_speaker(config: AppConfig) -> SpeechSink:
             speed=config.tts_speed,
             timeout_s=config.tts_timeout_s,
         )
+    if config.tts_provider == "openai-realtime":
+        if not config.api_key:
+            raise RuntimeError("TTS_PROVIDER=openai-realtime requires OPENAI_API_KEY")
+        return OpenAIRealtimeSpeech(
+            api_key=config.api_key,
+            model=config.tts_model,
+            voice=config.openai_tts_voice,
+            instructions=config.tts_instructions,
+            timeout_s=config.tts_timeout_s,
+        )
     if config.tts_provider == "local":
         return EspeakSpeech(config.tts_voice)
-    raise RuntimeError("TTS_PROVIDER must be 'local' or 'openai'")
+    raise RuntimeError("TTS_PROVIDER must be 'local', 'openai', or 'openai-realtime'")
 
 
 def _language_for_voice(voice: str) -> str:

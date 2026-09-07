@@ -185,14 +185,36 @@ class OpenAIWavFileSpeech:
 
 
 def _combine_wav_files(parts: list[Path], output_path: Path) -> None:
-    """Combine equal-format WAV chunks without changing playback order."""
+    """Combine equal-format WAV chunks without changing playback order.
+
+    Streaming TTS WAVs can legally mark their data length as ``0xffffffff``
+    because the final size was unknown while the bytes were sent.  Read such
+    files in bounded pieces until EOF; never trust that header's frame count.
+    """
 
     with wave.open(str(parts[0]), "rb") as first:
-        parameters = first.getparams()
+        reference = (
+            first.getnchannels(),
+            first.getsampwidth(),
+            first.getframerate(),
+            first.getcomptype(),
+            first.getcompname(),
+        )
     with wave.open(str(output_path), "wb") as combined:
-        combined.setparams(parameters)
+        combined.setnchannels(reference[0])
+        combined.setsampwidth(reference[1])
+        combined.setframerate(reference[2])
+        combined.setcomptype(reference[3], reference[4])
         for part in parts:
             with wave.open(str(part), "rb") as source:
-                if source.getparams()[:4] != parameters[:4]:
+                actual = (
+                    source.getnchannels(),
+                    source.getsampwidth(),
+                    source.getframerate(),
+                    source.getcomptype(),
+                    source.getcompname(),
+                )
+                if actual != reference:
                     raise RuntimeError("TTS segment format changed unexpectedly")
-                combined.writeframes(source.readframes(source.getnframes()))
+                while chunk := source.readframes(8_192):
+                    combined.writeframesraw(chunk)

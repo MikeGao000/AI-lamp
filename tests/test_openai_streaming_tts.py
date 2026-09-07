@@ -1,11 +1,13 @@
 import io
 import json
+import tempfile
 import unittest
 import wave
+from pathlib import Path
 from unittest.mock import patch
 
 from lamp_core.cloud import OpenAIResponsesVisionClient
-from lamp_core.speech import OpenAITtsSpeech
+from lamp_core.speech import OpenAITtsSpeech, _combine_wav_files
 
 
 def wav_bytes() -> bytes:
@@ -64,3 +66,18 @@ class OpenAIStreamingAndTtsTests(unittest.TestCase):
         self.assertEqual("marin", payload["voice"])
         self.assertEqual("wav", payload["response_format"])
         self.assertEqual("Warm, calm Danish reading.", payload["instructions"])
+
+    def test_combines_wav_with_streaming_unknown_data_size(self):
+        streaming_wav = bytearray(wav_bytes())
+        # WAV data chunk size is at byte offset 40.  Streaming services may set
+        # it to 0xffffffff until the connection closes.
+        streaming_wav[40:44] = b"\xff\xff\xff\xff"
+        with tempfile.TemporaryDirectory() as directory:
+            first = Path(directory) / "first.wav"
+            second = Path(directory) / "second.wav"
+            output = Path(directory) / "output.wav"
+            first.write_bytes(streaming_wav)
+            second.write_bytes(streaming_wav)
+            _combine_wav_files([first, second], output)
+            with wave.open(str(output), "rb") as combined:
+                self.assertEqual(4, combined.getnframes())

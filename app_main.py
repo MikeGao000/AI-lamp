@@ -185,7 +185,7 @@ def accept_page_jpeg(
             previous_page_context=previous_page_context,
             on_output_text_delta=early_speech.feed if early_speech is not None else None,
         )
-        extension = page.get("teacher_story") or page.get("narration") or page["spoken_reading"]
+        extension = story_extension_for_tts(page, previous_page_context)
         speech_segments = ((early_speech.spoken_reading,) if early_speech and early_speech.spoken_reading else ()) + (extension,)
         story = extension
         next_context = page_context_for_next_page(page)
@@ -355,6 +355,16 @@ def page_context_for_next_page(page: dict) -> str:
     description = str(page.get("image_description", "")).strip()
     context = f"Previous page visible text: {visible_text}\nPrevious page visible illustration: {description}"
     return context[:1200]
+
+
+def story_extension_for_tts(page: dict, previous_page_context: str | None = None) -> str:
+    """Keep a model-approved, relevant previous-page callback audible to the child."""
+
+    story = str(page.get("teacher_story") or page.get("narration") or page["spoken_reading"]).strip()
+    callback = str(page.get("continuity_callback") or "").strip()
+    if previous_page_context and callback:
+        return f"{callback} {story}".strip()
+    return story
 
 
 if __name__ == "__main__":

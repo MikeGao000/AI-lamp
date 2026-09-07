@@ -1,7 +1,7 @@
 import unittest
 
 from lamp_core.reading_prompt import PICTURE_BOOK_SYSTEM_INSTRUCTIONS, build_picture_book_prompt
-from app_main import _language_for_voice, page_context_for_next_page
+from app_main import _language_for_voice, page_context_for_next_page, story_extension_for_tts
 
 
 class ReadingPromptTests(unittest.TestCase):
@@ -13,10 +13,9 @@ class ReadingPromptTests(unittest.TestCase):
         self.assertIn("teacher_story", prompt)
         self.assertIn("Previous page: a bear says goodnight.", prompt)
         self.assertIn("READING_POSTURE, GENTLE_NOD, STAY_STILL, or NONE", prompt)
-        self.assertIn("45-65 words", prompt)
-        self.assertIn("150-200 Chinese characters", prompt)
-        self.assertIn("Length is a contract", prompt)
-        self.assertIn("include exactly one short, natural callback", prompt)
+        self.assertIn("approximately 150-200 visible characters", prompt)
+        self.assertIn("continuity_callback", prompt)
+        self.assertIn("put exactly one short, natural callback", prompt)
         self.assertIn("directly relevant", prompt)
         self.assertIn("about 2 years old", build_picture_book_prompt("Danish"))
 
@@ -34,3 +33,15 @@ class ReadingPromptTests(unittest.TestCase):
         self.assertIn("Godnat", context)
         self.assertIn("A bear under a moon.", context)
         self.assertLessEqual(len(context), 1200)
+
+    def test_relevant_callback_is_spoken_only_with_prior_page_context(self):
+        page = {
+            "spoken_reading": "Godnat",
+            "teacher_story": "Bjørnen ser op på månen.",
+            "continuity_callback": "Se, månen er her igen.",
+        }
+        self.assertEqual(
+            story_extension_for_tts(page, "Previous page: a moon."),
+            "Se, månen er her igen. Bjørnen ser op på månen.",
+        )
+        self.assertEqual(story_extension_for_tts(page), "Bjørnen ser op på månen.")

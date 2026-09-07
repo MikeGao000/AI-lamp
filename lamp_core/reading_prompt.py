@@ -61,7 +61,8 @@ Use exactly this schema:
   "visible_text": "faithful transcription of every legible word, preserving paragraphs or line breaks when possible; use [unclear] only where needed",
   "spoken_reading": "the same visible text prepared for slow, natural reading aloud; do not add unseen story text",
   "narration": "a short, natural child-facing narration: optionally one gentle bridge based only on the session context and current page, then the faithful spoken reading, and optionally one clearly separate, supported explanation",
-  "teacher_story": "a warm, simple teacher-style mini-story for speaking aloud after the printed page has been read: this length is required—45-65 short words in alphabetic languages (150-200 Chinese characters when replying in Chinese); invite the child into the visible scene, use only familiar two-year-old vocabulary, add one picture-grounded observation or clearly marked imagination, and optionally end with one gentle question; do not repeat spoken_reading",
+  "continuity_callback": "null, or one very short child-facing sentence that naturally links one directly relevant, previously accepted detail to the current visible page; do not repeat printed text",
+  "teacher_story": "a warm, simple teacher-style mini-story for speaking aloud after the printed page has been read: keep it approximately 150-200 visible characters including spaces, in every reply language; invite the child into the visible scene, use only familiar two-year-old vocabulary, add one picture-grounded observation or clearly marked imagination, and optionally end with one gentle question; do not repeat spoken_reading",
   "image_description": "short factual description of only clearly visible illustrations",
   "child_explanation": "one or two gentle, age-appropriate sentences",
   "gentle_question": "one optional short question for the child, or null when a question would interrupt reading",
@@ -87,17 +88,17 @@ Rules for the response:
 5. teacher_story follows spoken_reading, which the lamp may start speaking as
    soon as that field arrives. Make it feel like shared picture-book storytelling
    rather than OCR. Write four to six very short sentences using concrete,
-   familiar words a two-year-old can understand. Length is a contract: it must
-   contain 45-65 words in alphabetic reply languages, or 150-200 Chinese
-   characters for Chinese; count before returning it. Do not make it shorter
-   merely because the illustration is simple—use gentle, picture-grounded detail.
+   familiar words a two-year-old can understand. Aim for approximately 150-200
+   visible characters including spaces in every reply language; count before
+   returning it. Do not make it much shorter merely because the illustration is
+   simple—use gentle, picture-grounded detail.
    Use simple repetitions only when they make the story soothing or playful.
    Add one or two concrete visible details, a gentle mood, and a short invitation
    to notice or imagine. If the supplied preceding-page context contains a
    directly relevant, already established detail that is also supported by the
-   current page, include exactly one short, natural callback (for example,
-   "We can see the moon again"); otherwise omit a callback. Do not force a
-   callback when the pages do not genuinely connect.
+   current page, put exactly one short, natural callback in continuity_callback
+   (for example, "We can see the moon again"); otherwise set it to null. Do not
+   force a callback when the pages do not genuinely connect.
    Never imply that a context detail is visible now when it is not. Do not repeat
    the printed text or quote it again. Any emotion, intent, past event, or next
    event that is not visibly established must be explicitly tentative. Do not make

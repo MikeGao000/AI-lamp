@@ -64,6 +64,8 @@ class EventKind(str, Enum):
     VISUAL_QUERY = "visual_query"
     BOOK_STABLE = "book_stable"
     OBJECT_STABLE = "object_stable"
+    # STOP retains its original emergency-compatible contract. Interactive
+    # cancellation uses SOFT_STOP and never clears homing by itself.
     STOP = "stop"
     MUTE = "mute"
     RETURN_IDLE = "return_idle"
@@ -72,6 +74,9 @@ class EventKind(str, Enum):
     LIMIT_FAULT = "limit_fault"
     MOTOR_FAULT = "motor_fault"
     CAN_FAULT = "can_fault"
+    WAKE = "wake"
+    READ = "read"
+    SOFT_STOP = "soft_stop"
 
 
 class Direction(str, Enum):

@@ -22,6 +22,7 @@ class RouteKind(str, Enum):
     LOCAL_ONLY = "local_only"
     DROPPED_COOLDOWN = "dropped_cooldown"
     DROPPED_DUPLICATE = "dropped_duplicate"
+    DROPPED_UNSUPPORTED = "dropped_unsupported"
 
 
 @dataclass(frozen=True)
@@ -34,8 +35,9 @@ class RoutingDecision:
 class EventRouter:
     """Routes events without executing hardware or calling a model.
 
-    Emergency and explicit local commands are never delayed behind an ambient
-    event. Cloud-sensitive events remain local when privacy disallows upload.
+    Emergency events bypass cooldown and model routing. Queue-level priority
+    remains the responsibility of the service or the independent safety path.
+    Cloud-sensitive events remain local when privacy disallows upload.
     """
 
     DEFAULT_COOLDOWNS_MS: Mapping[EventKind, int] = {
@@ -53,6 +55,9 @@ class EventRouter:
     )
     LOCAL_KINDS = frozenset(
         {
+            EventKind.WAKE,
+            EventKind.READ,
+            EventKind.SOFT_STOP,
             EventKind.MUTE,
             EventKind.RETURN_IDLE,
             EventKind.STATUS_QUERY,
@@ -82,7 +87,7 @@ class EventRouter:
                 if duration_ms < 0:
                     raise ValueError("cooldown duration must be non-negative")
                 self._cooldowns_ms[kind] = duration_ms
-        self._last_accepted_ms: dict[tuple[EventSource, EventKind], int] = {}
+        self._last_accepted_ms: dict[tuple[EventSource, EventKind, str], int] = {}
         self._dedup_window_ms = dedup_window_ms
         self._dedup_capacity = dedup_capacity
         self._seen_event_ids: dict[str, int] = {}
@@ -119,15 +124,28 @@ class EventRouter:
         if event.kind in self.LOCAL_KINDS:
             return RoutingDecision(RouteKind.LOCAL_INTENT, "deterministic local command")
 
-        key = (event.source, event.kind)
+        semantic_id = ""
+        if event.kind is EventKind.BOOK_STABLE:
+            semantic_id = str(
+                event.payload.get("page_fingerprint") or event.payload.get("object_id") or ""
+            )
+        elif event.kind is EventKind.OBJECT_STABLE:
+            semantic_id = str(event.payload.get("object_id") or "")
+        key = (event.source, event.kind, semantic_id)
         cooldown_ms = self._cooldowns_ms.get(event.kind, 0)
         previous_ms = self._last_accepted_ms.get(key)
         if previous_ms is not None and now_ms - previous_ms < cooldown_ms:
             remaining_ms = cooldown_ms - (now_ms - previous_ms)
             return RoutingDecision(RouteKind.DROPPED_COOLDOWN, "same event is cooling down", remaining_ms)
 
+        if event.kind not in self.MEDIA_TO_MODEL_KINDS:
+            return RoutingDecision(
+                RouteKind.DROPPED_UNSUPPORTED,
+                "unclassified events are not eligible for model routing",
+            )
+
         self._last_accepted_ms[key] = now_ms
-        if event.privacy_mode is PrivacyMode.LOCAL_ONLY and event.kind in self.MEDIA_TO_MODEL_KINDS:
+        if event.privacy_mode is PrivacyMode.LOCAL_ONLY:
             return RoutingDecision(RouteKind.LOCAL_ONLY, "privacy mode forbids model upload")
 
         return RoutingDecision(RouteKind.MODEL, "eligible for the configured model route")

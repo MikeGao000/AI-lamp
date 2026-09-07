@@ -17,6 +17,7 @@ def event(
     priority: EventPriority = EventPriority.INTERACTIVE,
     privacy_mode: PrivacyMode = PrivacyMode.CLOUD_ALLOWED,
     event_id: str | None = None,
+    payload: dict[str, object] | None = None,
 ) -> LampEvent:
     return LampEvent(
         event_id=event_id or f"e-{kind.value}",
@@ -26,6 +27,7 @@ def event(
         kind=kind,
         priority=priority,
         privacy_mode=privacy_mode,
+        payload=payload or {},
     )
 
 
@@ -66,3 +68,39 @@ class EventRouterTests(unittest.TestCase):
             now_ms=100,
         )
         self.assertEqual(decision.route, RouteKind.LOCAL_INTENT)
+
+    def test_session_commands_are_deterministic_local_intents(self):
+        router = EventRouter()
+        for kind in (EventKind.WAKE, EventKind.READ, EventKind.SOFT_STOP):
+            with self.subTest(kind=kind):
+                decision = router.route(
+                    event(kind, source=EventSource.VOICE, priority=EventPriority.COMMAND),
+                    now_ms=100,
+                )
+                self.assertEqual(RouteKind.LOCAL_INTENT, decision.route)
+
+    def test_every_event_kind_has_an_explicit_route_classification(self):
+        classified = (
+            EventRouter.EMERGENCY_KINDS
+            | EventRouter.LOCAL_KINDS
+            | EventRouter.MEDIA_TO_MODEL_KINDS
+        )
+        self.assertEqual(set(EventKind), classified)
+
+    def test_different_books_do_not_share_one_global_cooldown(self):
+        router = EventRouter()
+        first = router.route(
+            event(EventKind.BOOK_STABLE, event_id="page-event-1", payload={"page_fingerprint": "page-1"}),
+            now_ms=100,
+        )
+        second_page = router.route(
+            event(EventKind.BOOK_STABLE, event_id="page-event-2", payload={"page_fingerprint": "page-2"}),
+            now_ms=101,
+        )
+        same_page = router.route(
+            event(EventKind.BOOK_STABLE, event_id="page-event-3", payload={"page_fingerprint": "page-1"}),
+            now_ms=102,
+        )
+        self.assertEqual(RouteKind.MODEL, first.route)
+        self.assertEqual(RouteKind.MODEL, second_page.route)
+        self.assertEqual(RouteKind.DROPPED_COOLDOWN, same_page.route)

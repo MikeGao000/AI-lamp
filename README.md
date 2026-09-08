@@ -25,6 +25,23 @@ MKS CAN 手册与厂商 STM32 例程的逐项研读、协议确认和 Pi 适配�
 python3 -m unittest discover -s tests -v
 ```
 
+## MuJoCo 训练仿真环境（桌面端）
+
+MuJoCo 与树莓派运行依赖分开安装在项目专用虚拟环境中。首次安装：
+
+```powershell
+python -m venv .venv-mujoco
+.\.venv-mujoco\Scripts\python.exe -m pip install -r requirements-mujoco.txt
+```
+
+验证物理引擎、弧度单位和位置执行器：
+
+```powershell
+.\.venv-mujoco\Scripts\python.exe simulate_mujoco_smoke.py
+```
+
+该验证模型只包含独立的 J1 仿真关节，不连接 CAN、GPIO 或真实电机。下一阶段会在此环境中加载完整五轴台灯和相机/书本训练场景。
+
 ## 全项目安全回归测试
 
 日常开发按本次改动的模块运行测试，而不是全扫描。例如，改绘本识别/提示词时：

@@ -97,6 +97,27 @@ class PageMemory:
         self._remember_observation(metadata_path, record, observed, jpeg, distance)
         return self._cached_page(metadata_path.parent, record)
 
+    def is_same_page(self, page_id: str, jpeg: bytes) -> bool:
+        """Confirm an interruption ended on the same page and learn safe variants."""
+
+        metadata_path = self.pages_dir / page_id / "page.json"
+        try:
+            record = json.loads(metadata_path.read_text(encoding="utf-8"))
+            observed = self._fingerprint(jpeg)
+            fingerprints = tuple(str(item) for item in record["fingerprints"])
+            distance = min(fingerprint_distance(observed, item) for item in fingerprints)
+        except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError, PageMemoryError):
+            return False
+        if distance > self.match_distance:
+            return False
+        try:
+            self._remember_observation(metadata_path, record, observed, jpeg, distance)
+        except OSError:
+            # A confirmed visual match remains valid even if the SD card cannot
+            # persist this optional additional learning sample.
+            pass
+        return True
+
     def store(
         self,
         jpeg: bytes,
@@ -109,7 +130,7 @@ class PageMemory:
         if not cleaned_segments:
             raise PageMemoryError("cannot store a page without spoken content")
         observed = self._fingerprint(jpeg)
-        page_id = hashlib.sha256(jpeg).hexdigest()[:16]
+        page_id = page_id_for_jpeg(jpeg)
         page_dir = self.pages_dir / page_id
         page_dir.mkdir(parents=True, exist_ok=True)
         image_path = page_dir / "reference.jpg"
@@ -180,3 +201,11 @@ class PageMemory:
             encoding="utf-8",
         )
         temporary.replace(path)
+
+
+def page_id_for_jpeg(jpeg: bytes) -> str:
+    """Return the stable identity used before a newly accepted page is stored."""
+
+    if not jpeg:
+        raise PageMemoryError("cannot identify an empty image")
+    return hashlib.sha256(jpeg).hexdigest()[:16]

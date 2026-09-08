@@ -11,8 +11,8 @@ import base64
 import hashlib
 from dataclasses import dataclass
 from pathlib import Path
-from queue import Queue
-from typing import Protocol
+from queue import Empty, Queue
+from typing import Callable, Protocol
 import json
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -26,6 +26,10 @@ class SpeechSynthesizer(Protocol):
     def synthesize(self, text: str) -> bytes: ...
 
 
+class StoppableSpeechSink(SpeechSink, Protocol):
+    def stop(self) -> None: ...
+
+
 class CloudSpeechError(RuntimeError):
     """A cloud TTS request failed without producing usable audio."""
 
@@ -33,12 +37,42 @@ class CloudSpeechError(RuntimeError):
 @dataclass
 class EspeakSpeech:
     voice: str = "da"
+    _lock: threading.Lock | None = None
+    _process: subprocess.Popen[bytes] | None = None
+
+    def __post_init__(self) -> None:
+        if self._lock is None:
+            self._lock = threading.Lock()
 
     def speak(self, text: str) -> None:
         executable = shutil.which("espeak-ng") or shutil.which("espeak")
         if executable is None:
             raise RuntimeError("install espeak-ng to enable local speech")
-        subprocess.run([executable, "-v", self.voice, text], check=True)
+        assert self._lock is not None
+        with self._lock:
+            process = subprocess.Popen([executable, "-v", self.voice, text])
+            self._process = process
+        try:
+            return_code = process.wait()
+            if return_code != 0 and return_code != -15:
+                raise subprocess.CalledProcessError(return_code, process.args)
+        finally:
+            with self._lock:
+                if self._process is process:
+                    self._process = None
+
+    def stop(self) -> None:
+        assert self._lock is not None
+        with self._lock:
+            process = self._process
+        if process is not None and process.poll() is None:
+            process.terminate()
+
+    @property
+    def is_playing(self) -> bool:
+        assert self._lock is not None
+        with self._lock:
+            return self._process is not None and self._process.poll() is None
 
 
 @dataclass
@@ -204,23 +238,31 @@ class OpenAIRealtimeSpeech:
 class CachedAudioSpeech:
     """Cache generated WAV bytes locally, then play them without another API call."""
 
-    cache_dir: Path
+    cache_dir: Path | None
     client: SpeechSynthesizer
-    _lock: threading.Lock | None = None
+    _cache_lock: threading.Lock | None = None
+    _playback_lock: threading.Lock | None = None
+    _player: subprocess.Popen[bytes] | None = None
+    _cancel_version: int = 0
 
     def __post_init__(self) -> None:
-        self.cache_dir.mkdir(parents=True, exist_ok=True)
-        if self._lock is None:
-            self._lock = threading.Lock()
+        if self.cache_dir is not None:
+            self.cache_dir.mkdir(parents=True, exist_ok=True)
+        if self._cache_lock is None:
+            self._cache_lock = threading.Lock()
+        if self._playback_lock is None:
+            self._playback_lock = threading.Lock()
 
     def synthesize(self, text: str) -> bytes:
         cleaned = text.strip()
         if not cleaned:
             raise CloudSpeechError("cannot synthesize empty text")
+        if self.cache_dir is None:
+            return self.client.synthesize(cleaned)
         cache_key = self._cache_key(cleaned)
         audio_path = self.cache_dir / f"{cache_key}.wav"
-        assert self._lock is not None
-        with self._lock:
+        assert self._cache_lock is not None
+        with self._cache_lock:
             if audio_path.is_file():
                 audio = audio_path.read_bytes()
                 if audio:
@@ -232,11 +274,49 @@ class CachedAudioSpeech:
             return audio
 
     def speak(self, text: str) -> None:
+        assert self._playback_lock is not None
+        with self._playback_lock:
+            version = self._cancel_version
         audio = self.synthesize(text)
-        player = shutil.which("aplay")
-        if player is None:
-            raise RuntimeError("install alsa-utils to play cached speech on Raspberry Pi")
-        subprocess.run([player, "-q"], input=audio, check=True)
+        with self._playback_lock:
+            if version != self._cancel_version:
+                return
+            player = shutil.which("aplay")
+            if player is None:
+                raise RuntimeError("install alsa-utils to play cached speech on Raspberry Pi")
+            process = subprocess.Popen(
+                [player, "-q"],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            self._player = process
+        try:
+            process.communicate(audio)
+            with self._playback_lock:
+                cancelled = version != self._cancel_version
+            if process.returncode != 0 and not cancelled:
+                raise subprocess.CalledProcessError(process.returncode, [player, "-q"])
+        finally:
+            with self._playback_lock:
+                if self._player is process:
+                    self._player = None
+
+    def stop(self) -> None:
+        """Cancel pending synthesis playback and terminate current ALSA audio."""
+
+        assert self._playback_lock is not None
+        with self._playback_lock:
+            self._cancel_version += 1
+            process = self._player
+        if process is not None and process.poll() is None:
+            process.terminate()
+
+    @property
+    def is_playing(self) -> bool:
+        assert self._playback_lock is not None
+        with self._playback_lock:
+            return self._player is not None and self._player.poll() is None
 
     def _cache_key(self, text: str) -> str:
         # Include every voice-setting field that changes the sound.  The API key
@@ -253,6 +333,14 @@ class CachedAudioSpeech:
         return hashlib.sha256(encoded).hexdigest()
 
 
+@dataclass(frozen=True)
+class _SpeechJob:
+    text: str
+    generation: int
+    on_started: Callable[[], None] | None = None
+    on_complete: Callable[[], None] | None = None
+
+
 class QueuedSpeech:
     """Play speech in order on one worker, without blocking vision streaming."""
 
@@ -260,25 +348,92 @@ class QueuedSpeech:
 
     def __init__(self, sink: SpeechSink) -> None:
         self._sink = sink
-        self._queue: Queue[str | object] = Queue()
+        self._queue: Queue[_SpeechJob | object] = Queue()
+        self._lock = threading.Lock()
+        self._generation = 0
+        self._speaking = threading.Event()
         self._worker = threading.Thread(target=self._run, name="lamp-tts", daemon=True)
         self._worker.start()
 
     def speak(self, text: str) -> None:
+        self.speak_tracked(text)
+
+    def speak_tracked(
+        self,
+        text: str,
+        *,
+        on_started: Callable[[], None] | None = None,
+        on_complete: Callable[[], None] | None = None,
+    ) -> None:
         if text.strip():
-            self._queue.put(text)
+            with self._lock:
+                generation = self._generation
+            self._queue.put(_SpeechJob(text, generation, on_started, on_complete))
 
     def _run(self) -> None:
         while True:
-            text = self._queue.get()
+            job = self._queue.get()
             try:
-                if text is self._STOP:
+                if job is self._STOP:
                     return
-                self._sink.speak(str(text))
+                assert isinstance(job, _SpeechJob)
+                with self._lock:
+                    active = job.generation == self._generation
+                if not active:
+                    continue
+                if job.on_started is not None:
+                    job.on_started()
+                self._speaking.set()
+                try:
+                    self._sink.speak(job.text)
+                except Exception as error:
+                    # Keep the worker alive so a transient TTS/audio-device
+                    # failure cannot permanently disable later speech.
+                    print(f"SPEECH PLAYBACK: {error}")
+                    continue
+                with self._lock:
+                    completed = job.generation == self._generation
+                if completed and job.on_complete is not None:
+                    job.on_complete()
             finally:
+                self._speaking.clear()
                 self._queue.task_done()
 
+    def interrupt(self) -> None:
+        """Drop queued speech and stop the currently audible utterance."""
+
+        with self._lock:
+            self._generation += 1
+        while True:
+            try:
+                queued = self._queue.get_nowait()
+            except Empty:
+                break
+            else:
+                # close() is not called concurrently by the application.  If it
+                # ever is, preserve the sentinel rather than losing shutdown.
+                if queued is self._STOP:
+                    self._queue.put(queued)
+                self._queue.task_done()
+                if queued is self._STOP:
+                    break
+        stop = getattr(self._sink, "stop", None)
+        if callable(stop):
+            stop()
+
+    @property
+    def is_speaking(self) -> bool:
+        return self._speaking.is_set()
+
+    @property
+    def is_audible(self) -> bool:
+        audible = getattr(self._sink, "is_playing", None)
+        if isinstance(audible, bool):
+            return audible
+        return self.is_speaking
+
     def close(self) -> None:
+        self.interrupt()
         self._queue.put(self._STOP)
         self._queue.join()
         self._worker.join(timeout=1.0)

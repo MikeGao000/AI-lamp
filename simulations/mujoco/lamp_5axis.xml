@@ -31,23 +31,23 @@
         <geom name="j1_motor" type="box" size="0.021 0.021 0.020" mass="0.35"
               rgba="0.30 0.36 0.44 1"/>
 
-        <!-- First U-link: 50 mm vertical offset before the 200 mm large arm. -->
-        <geom name="base_u_left" type="capsule" fromto="0 -0.045 0 0 -0.045 0.05"
-              size="0.009" mass="0.03" rgba="0.72 0.74 0.78 1"/>
-        <geom name="base_u_right" type="capsule" fromto="0 0.045 0 0 0.045 0.05"
-              size="0.009" mass="0.03" rgba="0.72 0.74 0.78 1"/>
-        <geom name="base_u_bridge" type="capsule" fromto="0 -0.045 0.05 0 0.045 0.05"
-              size="0.009" mass="0.03" rgba="0.72 0.74 0.78 1"/>
+        <!-- Red lower U-arm: joins the vertical J1 motor to the horizontal J2 motor. -->
+        <geom name="base_u_left" type="box" pos="0 -0.027 0.025" size="0.016 0.004 0.025"
+              mass="0.03" rgba="0.34 0.25 0.18 1"/>
+        <geom name="base_u_right" type="box" pos="0 0.027 0.025" size="0.016 0.004 0.025"
+              mass="0.03" rgba="0.34 0.25 0.18 1"/>
+        <geom name="base_u_bridge" type="box" pos="0 0 0" size="0.016 0.031 0.004"
+              mass="0.03" rgba="0.34 0.25 0.18 1"/>
         <!-- J2: shoulder pitch sits inside the top of the first 50 mm fork. -->
         <body name="j2_shoulder" pos="0 0 0.05">
           <joint name="j2_shoulder" type="hinge" axis="0 1 0"
                  range="-0.78 0.78" damping="1.0" armature="0.012"/>
           <!-- 42 x 42 x 40 mm stepper motor; the shaft is along Y. -->
           <geom name="j2_motor" type="box" size="0.021 0.020 0.021"
-                mass="0.18" rgba="0.95 0.60 0.20 1"/>
-          <!-- 200 mm large arm: J2 axis centre to J3 axis centre. -->
-          <geom name="large_arm_200mm" type="capsule" fromto="0 0 0 0.20 0 0"
-                size="0.018" mass="0.22" rgba="0.72 0.74 0.78 1"/>
+                mass="0.18" rgba="0.18 0.20 0.24 1"/>
+          <!-- Red 200 mm main arm: a plate-like member between J2 and J3. -->
+          <geom name="large_arm_200mm" type="box" pos="0.10 0 0"
+                size="0.10 0.015 0.018" mass="0.22" rgba="0.34 0.25 0.18 1"/>
 
           <!-- J3: elbow pitch, located at the end of the 200 mm large arm. -->
           <body name="j3_elbow" pos="0.20 0 0">
@@ -55,10 +55,10 @@
                    range="-0.95 0.95" damping="0.9" armature="0.010"/>
             <!-- 42 x 42 x 40 mm stepper motor; the shaft is along Y. -->
             <geom name="j3_motor" type="box" size="0.021 0.020 0.021"
-                  mass="0.15" rgba="0.95 0.60 0.20 1"/>
-            <!-- 90 mm small arm: J3 axis centre to J4 axis centre. -->
-            <geom name="small_arm_90mm" type="capsule" fromto="0 0 0 0.09 0 0"
-                  size="0.016" mass="0.16" rgba="0.68 0.70 0.74 1"/>
+                  mass="0.15" rgba="0.18 0.20 0.24 1"/>
+            <!-- Red 90 mm forearm: a plate-like member between J3 and J4. -->
+            <geom name="small_arm_90mm" type="box" pos="0.045 0 0"
+                  size="0.045 0.014 0.016" mass="0.16" rgba="0.34 0.25 0.18 1"/>
 
             <!-- J4: neck pitch, located at the end of the 90 mm small arm. -->
             <body name="j4_neck" pos="0.09 0 0">
@@ -66,31 +66,32 @@
                      range="-0.70 0.70" damping="0.7" armature="0.008"/>
               <!-- 42 x 42 x 40 mm stepper motor; the shaft is along Y. -->
               <geom name="j4_motor" type="box" size="0.021 0.020 0.021"
-                    mass="0.12" rgba="0.95 0.60 0.20 1"/>
+                    mass="0.12" rgba="0.18 0.20 0.24 1"/>
 
-              <!-- Second 50 mm fork: J4 axis centre to J5 head-yaw axis centre. -->
-              <geom name="neck_u_left" type="capsule" fromto="0 -0.045 0 0 -0.045 0.05"
-                    size="0.009" mass="0.03" rgba="0.72 0.74 0.78 1"/>
-              <geom name="neck_u_right" type="capsule" fromto="0 0.045 0 0 0.045 0.05"
-                    size="0.009" mass="0.03" rgba="0.72 0.74 0.78 1"/>
-              <geom name="neck_u_bridge" type="capsule" fromto="0 -0.045 0.05 0 0.045 0.05"
-                    size="0.009" mass="0.03" rgba="0.72 0.74 0.78 1"/>
+              <!-- Red upper U-arm: joins horizontal J4 to vertical J5. -->
+              <geom name="neck_u_left" type="box" pos="0 -0.027 0.025" size="0.014 0.004 0.025"
+                    mass="0.03" rgba="0.34 0.25 0.18 1"/>
+              <geom name="neck_u_right" type="box" pos="0 0.027 0.025" size="0.014 0.004 0.025"
+                    mass="0.03" rgba="0.34 0.25 0.18 1"/>
+              <geom name="neck_u_bridge" type="box" pos="0 0 0" size="0.014 0.031 0.004"
+                    mass="0.03" rgba="0.34 0.25 0.18 1"/>
 
-              <!-- J5 sits in the terminal fork and rotates the head horizontally. -->
+              <!-- J5 sits in the terminal fork opening and rotates the head horizontally. -->
               <body name="j5_head" pos="0 0 0.05">
                 <joint name="j5_head_yaw" type="hinge" axis="0 0 1"
                        range="-1.05 1.05" damping="0.6" armature="0.006"/>
                 <!-- 42 x 42 x 40 mm stepper motor; the shaft is vertical (Z). -->
                 <geom name="j5_motor" type="box" size="0.021 0.021 0.020" mass="0.10"
-                      rgba="0.95 0.60 0.20 1"/>
-                <geom name="head_adapter_plate" type="box" pos="0.035 0 0"
-                      size="0.035 0.045 0.006" mass="0.04" rgba="0.44 0.50 0.60 1"/>
-                <body name="lamp_head" pos="0.07 0 0">
-                  <geom name="head_shell" type="ellipsoid" size="0.11 0.08 0.06" mass="0.25"
-                        rgba="0.92 0.72 0.22 1"/>
-                  <geom name="light_diffuser" type="cylinder" pos="0.09 0 0" size="0.045 0.006"
+                      rgba="0.18 0.20 0.24 1"/>
+                <geom name="head_adapter_plate" type="box" pos="0.024 0 0"
+                      size="0.024 0.030 0.005" mass="0.04" rgba="0.34 0.25 0.18 1"/>
+                <body name="lamp_head" pos="0.048 0 0">
+                  <!-- 130 x 100 x 80 mm head: about 2.4 times the 42 mm motor face. -->
+                  <geom name="head_shell" type="ellipsoid" size="0.065 0.050 0.040" mass="0.25"
+                        rgba="0.30 0.31 0.33 1"/>
+                  <geom name="light_diffuser" type="cylinder" pos="0.055 0 0" size="0.035 0.005"
                         euler="0 1.5708 0" mass="0.02" rgba="0.95 0.95 0.82 1"/>
-                  <camera name="lamp_camera" pos="0.12 0 0" xyaxes="0 -1 0 0 0 1"/>
+                  <camera name="lamp_camera" pos="0.076 0 0" xyaxes="0 -1 0 0 0 1"/>
                 </body>
               </body>
             </body>

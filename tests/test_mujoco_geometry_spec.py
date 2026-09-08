@@ -34,8 +34,12 @@ class MuJoCoGeometrySpecTests(unittest.TestCase):
         self.assertEqual("0.20 0 0", j3.attrib["pos"])
         self.assertEqual("0.09 0 0", j4.attrib["pos"])
         self.assertEqual("0 0 0.05", j5.attrib["pos"])
-        self.assertEqual("0 0 0 0.20 0 0", named_element(self.root, "large_arm_200mm").attrib["fromto"])
-        self.assertEqual("0 0 0 0.09 0 0", named_element(self.root, "small_arm_90mm").attrib["fromto"])
+        large_arm = named_element(self.root, "large_arm_200mm")
+        small_arm = named_element(self.root, "small_arm_90mm")
+        self.assertEqual("box", large_arm.attrib["type"])
+        self.assertEqual("0.10 0.015 0.018", large_arm.attrib["size"])
+        self.assertEqual("box", small_arm.attrib["type"])
+        self.assertEqual("0.045 0.014 0.016", small_arm.attrib["size"])
 
     def test_each_joint_uses_a_42_mm_stepper_motor_envelope(self):
         expected_half_sizes = {
@@ -49,6 +53,22 @@ class MuJoCoGeometrySpecTests(unittest.TestCase):
             motor = named_element(self.root, motor_name)
             self.assertEqual("box", motor.attrib["type"])
             self.assertEqual(expected_size, motor.attrib["size"])
+
+    def test_u_arms_are_plate_frames_between_the_green_motor_positions(self):
+        # The real red members are solid U-arm frames, not thin wire capsules.
+        self.assertEqual(
+            "box",
+            named_element(self.root, "base_u_bridge").attrib["type"],
+        )
+        self.assertEqual(
+            "box",
+            named_element(self.root, "neck_u_bridge").attrib["type"],
+        )
+
+    def test_lamp_head_is_proportional_to_a_42_mm_stepper(self):
+        head = named_element(self.root, "head_shell")
+        self.assertEqual("0.065 0.050 0.040", head.attrib["size"])
+        self.assertLessEqual(2 * float(head.attrib["size"].split()[1]), 0.105)
 
 
 if __name__ == "__main__":

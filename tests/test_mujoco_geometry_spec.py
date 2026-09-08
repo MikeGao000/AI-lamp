@@ -30,14 +30,14 @@ class MuJoCoGeometrySpecTests(unittest.TestCase):
         j4 = named_element(self.root, "j4_neck")
         j5 = named_element(self.root, "j5_head")
 
-        self.assertEqual("0 0 0.05", j2.attrib["pos"])
-        self.assertEqual("0.20 0 0", j3.attrib["pos"])
+        self.assertEqual("0 0 0.06", j2.attrib["pos"])
+        self.assertEqual("0.12 0 0", j3.attrib["pos"])
         self.assertEqual("0.09 0 0", j4.attrib["pos"])
         self.assertEqual("0 0 0.05", j5.attrib["pos"])
-        large_arm = named_element(self.root, "large_arm_200mm")
+        large_arm = named_element(self.root, "large_arm_120mm")
         small_arm = named_element(self.root, "small_arm_90mm")
         self.assertEqual("box", large_arm.attrib["type"])
-        self.assertEqual("0.10 0.015 0.018", large_arm.attrib["size"])
+        self.assertEqual("0.06 0.015 0.018", large_arm.attrib["size"])
         self.assertEqual("box", small_arm.attrib["type"])
         self.assertEqual("0.045 0.014 0.016", small_arm.attrib["size"])
 

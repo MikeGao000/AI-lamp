@@ -44,6 +44,8 @@ python -m venv .venv-mujoco
 
 完整五轴模型按照片与 42 mm 电机标尺估算的轴心链布置：J1 底座水平旋转 → 6 cm 底部 U 型臂 → J2 肩部俯仰 → 12 cm 大臂 → J3 肘部俯仰 → 9 cm 小臂 → J4 颈部俯仰 → 5 cm 末端 U 型臂 → J5 灯头水平旋转。五个关节均按 42 × 42 × 40 mm 步进电机外形建模；关节限位和 minimum-jerk 速度来自项目既有五轴姿态库。运行连续姿态演示：
 
+MuJoCo 的 J2/J3/J4 含照片估算的静态安装角，因此所有姿态库数值为 0 的 `idle` 会呈现竖直 S 形站姿，而不是平铺在桌面上；姿态库数值本身未改动。
+
 ```powershell
 .\.venv-mujoco\Scripts\python.exe simulate_mujoco_5axis_pose.py
 ```

@@ -102,11 +102,12 @@
   </worldbody>
 
   <actuator>
-    <position name="j1_position" joint="j1_base_yaw" kp="4" forcelimited="true" forcerange="-0.96 0.96"/>
-    <position name="j2_position" joint="j2_shoulder" kp="3" forcelimited="true" forcerange="-0.72 0.72"/>
-    <position name="j3_position" joint="j3_elbow" kp="3" forcelimited="true" forcerange="-0.72 0.72"/>
-    <position name="j4_position" joint="j4_neck_pitch" kp="2" forcelimited="true" forcerange="-0.60 0.60"/>
-    <position name="j5_position" joint="j5_head_yaw" kp="2" forcelimited="true" forcerange="-0.60 0.60"/>
+    <!-- ctrlrange makes the native Simulate UI expose bounded drag sliders. -->
+    <position name="j1_position" joint="j1_base_yaw" kp="4" forcelimited="true" forcerange="-0.96 0.96" ctrllimited="true" ctrlrange="-1.57 1.57"/>
+    <position name="j2_position" joint="j2_shoulder" kp="3" forcelimited="true" forcerange="-0.72 0.72" ctrllimited="true" ctrlrange="-0.78 0.78"/>
+    <position name="j3_position" joint="j3_elbow" kp="3" forcelimited="true" forcerange="-0.72 0.72" ctrllimited="true" ctrlrange="-0.95 0.95"/>
+    <position name="j4_position" joint="j4_neck_pitch" kp="2" forcelimited="true" forcerange="-0.60 0.60" ctrllimited="true" ctrlrange="-0.70 0.70"/>
+    <position name="j5_position" joint="j5_head_yaw" kp="2" forcelimited="true" forcerange="-0.60 0.60" ctrllimited="true" ctrlrange="-1.05 1.05"/>
   </actuator>
 
   <keyframe>

@@ -48,6 +48,14 @@ python -m venv .venv-mujoco
 .\.venv-mujoco\Scripts\python.exe simulate_mujoco_5axis_pose.py
 ```
 
+要手工摆姿态而不是播放动作库，可运行：
+
+```powershell
+.\.venv-mujoco\Scripts\python.exe simulate_mujoco_5axis_drag.py
+```
+
+在右侧 `Actuator` 面板直接拖动 `j1_position` 到 `j5_position` 五个控制条；这些控制条沿既有关节范围限位，窗口关闭后终端会打印最终五轴姿态。双击选择一个部件后按住 `Ctrl` 拖动，可临时施加力来观察机构响应。
+
 模型文件为 `simulations/mujoco/lamp_5axis.xml`。灯头外壳与支架宽度是可替换的视觉占位；上述四段长度是当前几何依据。
 
 ## 全项目安全回归测试

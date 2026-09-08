@@ -70,6 +70,19 @@ class MuJoCoGeometrySpecTests(unittest.TestCase):
         self.assertEqual("0.065 0.050 0.040", head.attrib["size"])
         self.assertLessEqual(2 * float(head.attrib["size"].split()[1]), 0.105)
 
+    def test_drag_sliders_are_bounded_by_existing_joint_ranges(self):
+        expected_ranges = {
+            "j1_position": "-1.57 1.57",
+            "j2_position": "-0.78 0.78",
+            "j3_position": "-0.95 0.95",
+            "j4_position": "-0.70 0.70",
+            "j5_position": "-1.05 1.05",
+        }
+        for actuator_name, expected_range in expected_ranges.items():
+            actuator = named_element(self.root, actuator_name)
+            self.assertEqual("true", actuator.attrib["ctrllimited"])
+            self.assertEqual(expected_range, actuator.attrib["ctrlrange"])
+
 
 if __name__ == "__main__":
     unittest.main()

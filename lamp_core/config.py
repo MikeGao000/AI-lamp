@@ -49,6 +49,11 @@ class AppConfig:
     page_memory_enabled: bool = True
     page_memory_dir: str = "data/picture-book-library"
     page_match_distance: int = 7
+    microphone_enabled: bool = False
+    microphone_device: str | None = None
+    transcription_model: str = "gpt-4o-mini-transcribe"
+    microphone_vad_rms: int = 650
+    microphone_barge_in_multiplier: float = 1.8
 
     @classmethod
     def from_environment(cls) -> "AppConfig":
@@ -86,4 +91,11 @@ class AppConfig:
             page_memory_enabled=_bool(os.getenv("PAGE_MEMORY_ENABLED", "true")),
             page_memory_dir=os.getenv("PAGE_MEMORY_DIR", "data/picture-book-library"),
             page_match_distance=int(os.getenv("PAGE_MATCH_DISTANCE", "7")),
+            microphone_enabled=_bool(os.getenv("MICROPHONE_ENABLED", "false")),
+            microphone_device=os.getenv("MICROPHONE_DEVICE") or None,
+            transcription_model=os.getenv("TRANSCRIPTION_MODEL", "gpt-4o-mini-transcribe"),
+            microphone_vad_rms=int(os.getenv("MICROPHONE_VAD_RMS", "650")),
+            microphone_barge_in_multiplier=float(
+                os.getenv("MICROPHONE_BARGE_IN_MULTIPLIER", "1.8")
+            ),
         )

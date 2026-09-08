@@ -25,8 +25,10 @@ COMPONENT_TEST_PATTERNS: dict[str, tuple[str, ...]] = {
     "reading": (
         "test_cloud.py",
         "test_child_questions.py",
+        "test_listening.py",
         "test_openai_streaming_tts.py",
         "test_page_memory.py",
+        "test_reading_session.py",
         "test_reading_prompt.py",
         "test_vision.py",
     ),

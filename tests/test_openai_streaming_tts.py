@@ -1,6 +1,7 @@
 import io
 import json
 import tempfile
+import threading
 import unittest
 import wave
 from pathlib import Path
@@ -11,6 +12,7 @@ from lamp_core.speech import (
     CachedAudioSpeech,
     OpenAIRealtimeSpeech,
     OpenAITtsSpeech,
+    QueuedSpeech,
     _combine_wav_files,
 )
 
@@ -73,7 +75,73 @@ class CountingSynthesizer:
         return wav_bytes()
 
 
+class BlockingSpeechSink:
+    def __init__(self) -> None:
+        self.messages = []
+        self.started = threading.Event()
+        self.release = threading.Event()
+        self.stopped = threading.Event()
+
+    def speak(self, text: str) -> None:
+        self.messages.append(text)
+        self.started.set()
+        self.release.wait(1.0)
+
+    def stop(self) -> None:
+        self.stopped.set()
+        self.release.set()
+
+
+class BlockingPlayerProcess:
+    def __init__(self) -> None:
+        self.started = threading.Event()
+        self.terminated = threading.Event()
+        self.returncode = None
+        self.args = ["aplay", "-q"]
+
+    def communicate(self, audio):
+        self.started.set()
+        self.terminated.wait(1.0)
+        if self.returncode is None:
+            self.returncode = 0
+
+    def poll(self):
+        return self.returncode
+
+    def terminate(self):
+        self.returncode = -15
+        self.terminated.set()
+
+
 class OpenAIStreamingAndTtsTests(unittest.TestCase):
+    def test_cached_audio_stop_terminates_the_active_aplay_process(self):
+        player = BlockingPlayerProcess()
+        speech = CachedAudioSpeech(None, CountingSynthesizer())
+        with (
+            patch("lamp_core.speech.shutil.which", return_value="/usr/bin/aplay"),
+            patch("lamp_core.speech.subprocess.Popen", return_value=player),
+        ):
+            worker = threading.Thread(target=speech.speak, args=("Hej.",))
+            worker.start()
+            self.assertTrue(player.started.wait(1.0))
+            speech.stop()
+            worker.join(1.0)
+        self.assertFalse(worker.is_alive())
+        self.assertTrue(player.terminated.is_set())
+
+    def test_interrupt_stops_current_audio_and_drops_queued_sentences(self):
+        sink = BlockingSpeechSink()
+        speaker = QueuedSpeech(sink)
+        completed = []
+        speaker.speak_tracked("Første.", on_complete=lambda: completed.append("first"))
+        speaker.speak_tracked("Anden.", on_complete=lambda: completed.append("second"))
+        self.assertTrue(sink.started.wait(1.0))
+        speaker.interrupt()
+        self.assertTrue(sink.stopped.wait(1.0))
+        speaker.close()
+        self.assertEqual(["Første."], sink.messages)
+        self.assertEqual([], completed)
+
     def test_cached_audio_synthesizes_each_utterance_only_once(self):
         client = CountingSynthesizer()
         with tempfile.TemporaryDirectory() as directory:

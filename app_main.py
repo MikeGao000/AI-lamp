@@ -10,6 +10,7 @@ import argparse
 import json
 import re
 import sys
+import threading
 import time
 from dataclasses import dataclass
 from time import monotonic
@@ -18,12 +19,20 @@ from typing import Callable
 from lamp_core.cloud import CloudVisionError, OpenAIResponsesVisionClient, StaticStoryClient, StoryClient
 from lamp_core.config import AppConfig, load_dotenv
 from lamp_core.coordinator import AppEvent, ReadingCompanionCoordinator
+from lamp_core.listening import MicrophoneQuestionListener, OpenAITranscriptionClient
 from lamp_core.question_prompt import (
     CHILD_QUESTION_SYSTEM_INSTRUCTIONS,
     build_child_question_prompt,
     detect_one_turn_reply_language,
 )
-from lamp_core.page_memory import PageMemory, PageMemoryError
+from lamp_core.page_memory import (
+    PageMemory,
+    PageMemoryError,
+    fingerprint_distance,
+    fingerprint_jpeg,
+    page_id_for_jpeg,
+)
+from lamp_core.reading_session import InterruptibleReadingSession
 from lamp_core.reading_prompt import PICTURE_BOOK_SYSTEM_INSTRUCTIONS, build_picture_book_prompt
 from lamp_core.speech import (
     CachedAudioSpeech,
@@ -47,6 +56,7 @@ class AcceptedPage:
     recognition: dict | None
     speech_segments: tuple[str, ...]
     timing_s: dict[str, float]
+    page_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -100,22 +110,112 @@ def run_pi(config: AppConfig) -> None:
     source = Picamera2FrameSource()
     gate = StillnessGate(config.still_seconds, config.motion_threshold)
     speaker = QueuedSpeech(create_production_speaker(config))
-    controller = ReadingCompanionCoordinator(LIMITS, VirtualMotorBus(LIMITS), speaker)
     client = cloud_client(config)
     page_memory = (
         PageMemory(config.page_memory_dir, match_distance=config.page_match_distance)
         if config.page_memory_enabled
         else None
     )
+    frame_lock = threading.Lock()
+    latest_jpeg = b""
+    bound_page_id: str | None = None
+    bound_page_fingerprint: str | None = None
+
+    def current_frame() -> bytes:
+        with frame_lock:
+            return latest_jpeg
+
+    question_session = ChildQuestionSession(client, speaker, config)
+
+    def answerer(jpeg: bytes, question: str, context: str | None) -> str:
+        return question_session.ask(
+            jpeg,
+            question,
+            accepted_page_context=context,
+            speak_answer=False,
+        ).answer
+
+    def same_page(page_id: str, jpeg: bytes) -> bool:
+        if page_memory is not None and page_memory.is_same_page(page_id, jpeg):
+            return True
+        with frame_lock:
+            expected_id = bound_page_id
+            expected_fingerprint = bound_page_fingerprint
+        if page_id != expected_id or expected_fingerprint is None:
+            return False
+        try:
+            return (
+                fingerprint_distance(expected_fingerprint, fingerprint_jpeg(jpeg))
+                <= config.page_match_distance
+            )
+        except PageMemoryError:
+            return False
+
+    reading = InterruptibleReadingSession(
+        speaker,
+        answerer=answerer,
+        current_frame=current_frame,
+        same_page=same_page,
+    )
+    controller = ReadingCompanionCoordinator(LIMITS, VirtualMotorBus(LIMITS), reading)
+    listener: MicrophoneQuestionListener | None = None
+    if config.microphone_enabled:
+        if not config.api_key:
+            raise RuntimeError("MICROPHONE_ENABLED=true requires OPENAI_API_KEY")
+
+        def on_transcript(question: str) -> None:
+            print(f"CHILD QUESTION: {question}")
+            try:
+                reading.answer_question(question)
+            except (CloudVisionError, RuntimeError, ValueError) as error:
+                print(f"CHILD QUESTION: {error}")
+                reading.resume_after_question_failure()
+
+        listener = MicrophoneQuestionListener(
+            OpenAITranscriptionClient(
+                config.api_key,
+                config.api_base_url,
+                config.transcription_model,
+                config.tts_timeout_s,
+            ),
+            on_speech_started=reading.notify_child_speech_started,
+            on_transcript=on_transcript,
+            should_listen=reading.accepts_questions,
+            system_is_speaking=lambda: speaker.is_audible,
+            threshold_rms=config.microphone_vad_rms,
+            barge_in_multiplier=config.microphone_barge_in_multiplier,
+            device=config.microphone_device,
+        )
+        listener.start()
     previous_page_context: str | None = None
+    waiting_for_page_change = False
     controller.home()
     print("Camera loop started. Motors remain virtual until a verified driver adapter is added.")
     try:
         while True:
             jpeg, motion = source.capture_jpeg_and_motion()
+            with frame_lock:
+                latest_jpeg = jpeg
             if motion > config.motion_threshold:
                 controller.handle(AppEvent.BOOK_MOVED)
-            if gate.observe(motion):
+                gate.reset()
+                if waiting_for_page_change:
+                    reading.page_moved()
+                    question_session.reset_for_new_page()
+                    with frame_lock:
+                        bound_page_id = None
+                        bound_page_fingerprint = None
+                    waiting_for_page_change = False
+            if not waiting_for_page_change and gate.observe(motion):
+                provisional_page_id = page_id_for_jpeg(jpeg)
+                try:
+                    provisional_fingerprint = fingerprint_jpeg(jpeg)
+                except PageMemoryError:
+                    provisional_fingerprint = None
+                with frame_lock:
+                    bound_page_id = provisional_page_id
+                    bound_page_fingerprint = provisional_fingerprint
+                reading.begin_page(provisional_page_id, jpeg)
                 try:
                     accepted_page = accept_page_jpeg(
                         controller,
@@ -129,14 +229,27 @@ def run_pi(config: AppConfig) -> None:
                     # A cloud response must never terminate the camera loop or
                     # trigger motion.  Wait for the next stable frame instead.
                     print(f"CLOUD VISION: {error}")
+                    reading.page_moved()
                 else:
                     previous_page_context = accepted_page.next_context
+                    accepted_page_id = accepted_page.page_id or provisional_page_id
+                    with frame_lock:
+                        bound_page_id = accepted_page_id
+                        bound_page_fingerprint = provisional_fingerprint
+                    reading.bind_page(
+                        accepted_page_id,
+                        jpeg,
+                        accepted_page.next_context,
+                    )
+                    waiting_for_page_change = True
                 finally:
                     gate.reset()
             time.sleep(0.10)
     except KeyboardInterrupt:
         controller.handle(AppEvent.ESTOP)
     finally:
+        if listener is not None:
+            listener.close()
         source.close()
         speaker.close()
 
@@ -170,9 +283,8 @@ def create_production_speaker(config: AppConfig) -> SpeechSink:
         return EspeakSpeech(config.tts_voice)
     else:
         raise RuntimeError("TTS_PROVIDER must be 'local', 'openai', or 'openai-realtime'")
-    if config.page_memory_enabled:
-        return CachedAudioSpeech(PageMemory(config.page_memory_dir).audio_dir, cloud_speaker)
-    return cloud_speaker
+    cache_dir = PageMemory(config.page_memory_dir).audio_dir if config.page_memory_enabled else None
+    return CachedAudioSpeech(cache_dir, cloud_speaker)
 
 
 def _language_for_voice(voice: str) -> str:
@@ -228,6 +340,7 @@ def accept_page_jpeg(
                     recognition=cached_page.recognition,
                     speech_segments=speech_segments,
                     timing_s=timing_s,
+                    page_id=cached_page.page_id,
                 )
     early_speech = StreamingReadingStarter(controller.speaker) if config.cloud_enabled and config.cloud_stream else None
     if config.cloud_enabled:
@@ -258,6 +371,7 @@ def accept_page_jpeg(
     print("Narration to TTS:", " ".join(speech_segments))
     print("Vision timing:", timing_s)
     controller.handle(AppEvent.BOOK_STILL)
+    stored_page_id: str | None = None
     if page_memory is not None:
         try:
             stored_page = page_memory.store(
@@ -266,6 +380,7 @@ def accept_page_jpeg(
                 speech_segments=speech_segments,
                 next_context=next_context,
             )
+            stored_page_id = stored_page.page_id
             print(f"PAGE MEMORY: stored {stored_page.page_id}")
         except (OSError, PageMemoryError) as error:
             print(f"PAGE MEMORY: store skipped: {error}")
@@ -275,6 +390,7 @@ def accept_page_jpeg(
         recognition=page,
         speech_segments=speech_segments,
         timing_s=timing_s,
+        page_id=stored_page_id,
     )
 
 
@@ -312,6 +428,8 @@ def answer_child_question(
     accepted_page_context: str | None = None,
     reply_language: str | None = None,
     previous_turn: ChildQuestionTurn | None = None,
+    *,
+    speak_answer: bool = True,
 ) -> ChildQuestionAnswer:
     """Answer one child question without moving the lamp or advancing the story.
 
@@ -346,7 +464,8 @@ def answer_child_question(
     if not isinstance(answer, str) or not answer.strip():
         raise CloudVisionError("child-question model response lacked answer")
     spoken_answer = answer.strip()
-    speaker.speak(spoken_answer)
+    if speak_answer:
+        speaker.speak(spoken_answer)
     return ChildQuestionAnswer(spoken_answer, result, ChildQuestionTurn(spoken_answer))
 
 
@@ -365,6 +484,8 @@ class ChildQuestionSession:
         question: str,
         pointed_object: str | None = None,
         accepted_page_context: str | None = None,
+        *,
+        speak_answer: bool = True,
     ) -> ChildQuestionAnswer:
         result = answer_child_question(
             self.client,
@@ -375,6 +496,7 @@ class ChildQuestionSession:
             pointed_object,
             accepted_page_context,
             previous_turn=self.previous_turn,
+            speak_answer=speak_answer,
         )
         self.previous_turn = result.next_turn
         return result

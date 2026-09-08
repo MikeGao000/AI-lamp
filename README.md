@@ -42,6 +42,14 @@ python -m venv .venv-mujoco
 
 该验证模型只包含独立的 J1 仿真关节，不连接 CAN、GPIO 或真实电机。下一阶段会在此环境中加载完整五轴台灯和相机/书本训练场景。
 
+完整五轴模型使用当前实物结构尺寸：底座 U 型偏移 5 cm、大臂 12 cm、小臂 9 cm、颈部 U 型偏移 5 cm；其关节限位和 minimum-jerk 速度来自项目既有五轴姿态库。运行连续姿态演示：
+
+```powershell
+.\.venv-mujoco\Scripts\python.exe simulate_mujoco_5axis_pose.py
+```
+
+模型文件为 `simulations/mujoco/lamp_5axis.xml`。灯头外壳与支架宽度是可替换的视觉占位；上述四段长度是当前几何依据。
+
 ## 全项目安全回归测试
 
 日常开发按本次改动的模块运行测试，而不是全扫描。例如，改绘本识别/提示词时：

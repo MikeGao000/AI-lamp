@@ -1,0 +1,111 @@
+<!--
+  Five-axis desk-lamp geometry for offline MuJoCo playback and later training.
+  User-provided centre-to-centre structure: base U-link 50 mm, large arm 120 mm,
+  small arm 90 mm, neck U-link 50 mm.  Unspecified widths, motor shells and
+  lamp-head proportions are deliberately visual placeholders.
+-->
+<mujoco model="lamp_5axis">
+  <compiler angle="radian"/>
+  <option timestep="0.002" gravity="0 0 -9.81"/>
+  <visual>
+    <global offwidth="1280" offheight="720"/>
+  </visual>
+  <default>
+    <!-- Kinematic first model: geometry is visual until masses and contact are calibrated. -->
+    <geom contype="0" conaffinity="0" friction="0.8 0.1 0.1"/>
+  </default>
+
+  <worldbody>
+    <geom name="desk" type="plane" size="2 2 0.1" rgba="0.12 0.12 0.12 1"/>
+    <light name="room_light" pos="-0.4 -0.7 1.5" diffuse="0.8 0.8 0.8"/>
+
+    <body name="base" pos="0 0 0.04">
+      <geom name="base_shell" type="cylinder" size="0.14 0.04" mass="1.2"
+            rgba="0.18 0.20 0.24 1"/>
+
+      <!-- J1: base yaw. -->
+      <body name="j1_base" pos="0 0 0.05">
+        <joint name="j1_base_yaw" type="hinge" axis="0 0 1"
+               range="-1.57 1.57" damping="1.2" armature="0.015"/>
+        <geom name="j1_motor" type="cylinder" size="0.075 0.035" mass="0.35"
+              rgba="0.30 0.36 0.44 1"/>
+
+        <!-- First U-link: 50 mm vertical offset before the 120 mm large arm. -->
+        <geom name="base_u_left" type="capsule" fromto="0 -0.045 0 0 -0.045 0.05"
+              size="0.009" mass="0.03" rgba="0.72 0.74 0.78 1"/>
+        <geom name="base_u_right" type="capsule" fromto="0 0.045 0 0 0.045 0.05"
+              size="0.009" mass="0.03" rgba="0.72 0.74 0.78 1"/>
+        <geom name="base_u_bridge" type="capsule" fromto="0 -0.045 0.05 0 0.045 0.05"
+              size="0.009" mass="0.03" rgba="0.72 0.74 0.78 1"/>
+        <geom name="large_arm_120mm" type="capsule" fromto="0 0 0.05 0.12 0 0.05"
+              size="0.018" mass="0.22" rgba="0.72 0.74 0.78 1"/>
+
+        <!-- J2: shoulder pitch, located at the end of the 120 mm large arm. -->
+        <body name="j2_shoulder" pos="0.12 0 0.05">
+          <joint name="j2_shoulder" type="hinge" axis="0 1 0"
+                 range="-0.78 0.78" damping="1.0" armature="0.012"/>
+          <geom name="j2_motor" type="cylinder" size="0.04 0.028" euler="1.5708 0 0"
+                mass="0.18" rgba="0.95 0.60 0.20 1"/>
+          <geom name="small_arm_90mm" type="capsule" fromto="0 0 0 0.09 0 0"
+                size="0.016" mass="0.16" rgba="0.68 0.70 0.74 1"/>
+
+          <!-- J3: elbow pitch, located at the end of the 90 mm small arm. -->
+          <body name="j3_elbow" pos="0.09 0 0">
+            <joint name="j3_elbow" type="hinge" axis="0 1 0"
+                   range="-0.95 0.95" damping="0.9" armature="0.010"/>
+            <geom name="j3_motor" type="cylinder" size="0.038 0.025" euler="1.5708 0 0"
+                  mass="0.15" rgba="0.95 0.60 0.20 1"/>
+
+            <!-- Second U-link: 50 mm elbow-to-neck offset. -->
+            <geom name="neck_u_left" type="capsule" fromto="0 -0.045 0 0 -0.045 0.05"
+                  size="0.009" mass="0.03" rgba="0.72 0.74 0.78 1"/>
+            <geom name="neck_u_right" type="capsule" fromto="0 0.045 0 0 0.045 0.05"
+                  size="0.009" mass="0.03" rgba="0.72 0.74 0.78 1"/>
+            <geom name="neck_u_bridge" type="capsule" fromto="0 -0.045 0.05 0 0.045 0.05"
+                  size="0.009" mass="0.03" rgba="0.72 0.74 0.78 1"/>
+
+            <!-- J4 is in the U-link opening and tilts the head vertically. -->
+            <body name="j4_neck" pos="0 0 0.05">
+              <joint name="j4_neck_pitch" type="hinge" axis="0 1 0"
+                     range="-0.70 0.70" damping="0.7" armature="0.008"/>
+              <geom name="j4_motor" type="cylinder" size="0.032 0.024" euler="1.5708 0 0"
+                    mass="0.12" rgba="0.95 0.60 0.20 1"/>
+
+              <!-- Flat adapter carries J5, whose axis turns the lamp head horizontally. -->
+              <geom name="head_adapter_plate" type="box" pos="0.035 0 0"
+                    size="0.035 0.045 0.006" mass="0.04" rgba="0.44 0.50 0.60 1"/>
+              <body name="j5_head" pos="0.07 0 0">
+                <joint name="j5_head_yaw" type="hinge" axis="0 0 1"
+                       range="-1.05 1.05" damping="0.6" armature="0.006"/>
+                <geom name="j5_motor" type="cylinder" size="0.03 0.022" mass="0.10"
+                      rgba="0.95 0.60 0.20 1"/>
+                <body name="lamp_head" pos="0.07 0 0">
+                  <geom name="head_shell" type="ellipsoid" size="0.11 0.08 0.06" mass="0.25"
+                        rgba="0.92 0.72 0.22 1"/>
+                  <geom name="light_diffuser" type="cylinder" pos="0.09 0 0" size="0.045 0.006"
+                        euler="0 1.5708 0" mass="0.02" rgba="0.95 0.95 0.82 1"/>
+                  <camera name="lamp_camera" pos="0.12 0 0" xyaxes="0 -1 0 0 0 1"/>
+                </body>
+              </body>
+            </body>
+          </body>
+        </body>
+      </body>
+    </body>
+  </worldbody>
+
+  <actuator>
+    <position name="j1_position" joint="j1_base_yaw" kp="4" forcelimited="true" forcerange="-0.96 0.96"/>
+    <position name="j2_position" joint="j2_shoulder" kp="3" forcelimited="true" forcerange="-0.72 0.72"/>
+    <position name="j3_position" joint="j3_elbow" kp="3" forcelimited="true" forcerange="-0.72 0.72"/>
+    <position name="j4_position" joint="j4_neck_pitch" kp="2" forcelimited="true" forcerange="-0.60 0.60"/>
+    <position name="j5_position" joint="j5_head_yaw" kp="2" forcelimited="true" forcerange="-0.60 0.60"/>
+  </actuator>
+
+  <keyframe>
+    <key name="idle" qpos="0 0 0 0 0"/>
+    <key name="look_left" qpos="-0.55 -0.08 0.12 0.10 0.30"/>
+    <key name="look_right" qpos="0.55 -0.08 0.12 0.10 -0.30"/>
+    <key name="reading" qpos="0.25 -0.20 0.30 0.12 -0.18"/>
+  </keyframe>
+</mujoco>

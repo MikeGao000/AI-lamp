@@ -64,6 +64,12 @@ python -m venv .venv-mujoco
 
 该阶段会导入 `idle` 和全部命名姿态，生成所有 30 条有向转场；训练的对象是 minimum-jerk 插值策略，输出验证集最大关节误差。它只使用本地姿态库和 MuJoCo，不调用云端或真实硬件。
 
+要在窗口中观看训练策略本身的回放，而非原始轨迹回放，可运行：
+
+```powershell
+.\.venv-mujoco\Scripts\python.exe simulate_mujoco_trained_policy.py
+```
+
 模型文件为 `simulations/mujoco/lamp_5axis.xml`。灯头外壳与支架宽度是可替换的视觉占位；上述四段长度是当前几何依据。
 
 ## 全项目安全回归测试

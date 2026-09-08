@@ -56,6 +56,14 @@ python -m venv .venv-mujoco
 
 在右侧 `Actuator` 面板直接拖动 `j1_position` 到 `j5_position` 五个控制条；这些控制条沿既有关节范围限位，窗口关闭后终端会打印最终五轴姿态。双击选择一个部件后按住 `Ctrl` 拖动，可临时施加力来观察机构响应。
 
+要从当前五轴姿态库开始本地模仿训练并在 MuJoCo 中验证未参与训练的转场，可运行：
+
+```powershell
+.\.venv-mujoco\Scripts\python.exe simulate_mujoco_pose_training.py
+```
+
+该阶段会导入 `idle` 和全部命名姿态，生成所有 30 条有向转场；训练的对象是 minimum-jerk 插值策略，输出验证集最大关节误差。它只使用本地姿态库和 MuJoCo，不调用云端或真实硬件。
+
 模型文件为 `simulations/mujoco/lamp_5axis.xml`。灯头外壳与支架宽度是可替换的视觉占位；上述四段长度是当前几何依据。
 
 ## 全项目安全回归测试

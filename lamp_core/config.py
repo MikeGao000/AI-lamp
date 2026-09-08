@@ -42,9 +42,13 @@ class AppConfig:
     tts_speed: float
     tts_timeout_s: float
     reading_language: str
+    question_reply_language: str
     cloud_stream: bool
     cloud_reasoning_effort: str
     cloud_max_output_tokens: int
+    page_memory_enabled: bool = True
+    page_memory_dir: str = "data/picture-book-library"
+    page_match_distance: int = 7
 
     @classmethod
     def from_environment(cls) -> "AppConfig":
@@ -61,15 +65,25 @@ class AppConfig:
             openai_tts_voice=os.getenv("OPENAI_TTS_VOICE", "marin"),
             tts_instructions=os.getenv(
                 "TTS_INSTRUCTIONS",
-                "Speak like a warm, skilled kindergarten teacher sharing a picture book. "
-                "Use gentle expressive melody, short natural pauses, and a lively sense of wonder. "
-                "Sound affectionate and engaged, never rushed, flat, theatrical, or sing-song. "
-                "Emphasize tenderness, surprise, and questions naturally. Match the language of the text.",
+                "You are a beloved, playful, experienced kindergarten teacher reading a picture book to one child. "
+                "Sound close, deeply warm, patient, affectionate, and genuinely delighted by the story; never sound like "
+                "an announcer, an audiobook reader, or a synthetic narrator. Use a very unhurried, two-year-old-friendly "
+                "pace: around one quarter slower than everyday adult conversation, while still flowing naturally. Pause "
+                "briefly after each short thought, let tender moments and important pictures breathe, and leave a clearly "
+                "longer pause before a gentle question so the child has room to think. Shape the melody around the meaning: a soft smile "
+                "and little spark of playfulness for happy discoveries, quiet awe for moonlight or magic, and a caring hush "
+                "for tender moments. Vary warmth and energy naturally; be lively and inviting without becoming sing-song, "
+                "theatrical, flat, rushed, exaggerated, or over-enunciated. Preserve the language and words supplied to you "
+                "exactly; do not translate, add explanations, or invent extra story content.",
             ),
             tts_speed=float(os.getenv("TTS_SPEED", "0.94")),
             tts_timeout_s=float(os.getenv("TTS_TIMEOUT_SECONDS", "30")),
             reading_language=os.getenv("READING_LANGUAGE", "Danish"),
+            question_reply_language=os.getenv("QUESTION_REPLY_LANGUAGE", "Danish"),
             cloud_stream=_bool(os.getenv("CLOUD_STREAM", "true")),
             cloud_reasoning_effort=os.getenv("CLOUD_REASONING_EFFORT", "none"),
             cloud_max_output_tokens=int(os.getenv("CLOUD_MAX_OUTPUT_TOKENS", "700")),
+            page_memory_enabled=_bool(os.getenv("PAGE_MEMORY_ENABLED", "true")),
+            page_memory_dir=os.getenv("PAGE_MEMORY_DIR", "data/picture-book-library"),
+            page_match_distance=int(os.getenv("PAGE_MATCH_DISTANCE", "7")),
         )

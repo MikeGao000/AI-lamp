@@ -18,8 +18,21 @@ from typing import Callable
 from lamp_core.cloud import CloudVisionError, OpenAIResponsesVisionClient, StaticStoryClient, StoryClient
 from lamp_core.config import AppConfig, load_dotenv
 from lamp_core.coordinator import AppEvent, ReadingCompanionCoordinator
+from lamp_core.question_prompt import (
+    CHILD_QUESTION_SYSTEM_INSTRUCTIONS,
+    build_child_question_prompt,
+    detect_one_turn_reply_language,
+)
+from lamp_core.page_memory import PageMemory, PageMemoryError
 from lamp_core.reading_prompt import PICTURE_BOOK_SYSTEM_INSTRUCTIONS, build_picture_book_prompt
-from lamp_core.speech import EspeakSpeech, OpenAITtsSpeech, QueuedSpeech, SpeechSink
+from lamp_core.speech import (
+    CachedAudioSpeech,
+    EspeakSpeech,
+    OpenAIRealtimeSpeech,
+    OpenAITtsSpeech,
+    QueuedSpeech,
+    SpeechSink,
+)
 from lamp_core.vision import Picamera2FrameSource, StillnessGate
 from simulate_system import LIMITS
 from lamp_core.virtual_hardware import SpeechStub, VirtualMotorBus
@@ -34,6 +47,22 @@ class AcceptedPage:
     recognition: dict | None
     speech_segments: tuple[str, ...]
     timing_s: dict[str, float]
+
+
+@dataclass(frozen=True)
+class ChildQuestionAnswer:
+    """A grounded answer that was queued on the same configured TTS voice."""
+
+    answer: str
+    recognition: dict
+    next_turn: "ChildQuestionTurn"
+
+
+@dataclass(frozen=True)
+class ChildQuestionTurn:
+    """Only the last grounded answer needed for a one-turn language rephrase."""
+
+    last_answer: str
 
 
 def cloud_client(config: AppConfig) -> StoryClient:
@@ -73,6 +102,11 @@ def run_pi(config: AppConfig) -> None:
     speaker = QueuedSpeech(create_production_speaker(config))
     controller = ReadingCompanionCoordinator(LIMITS, VirtualMotorBus(LIMITS), speaker)
     client = cloud_client(config)
+    page_memory = (
+        PageMemory(config.page_memory_dir, match_distance=config.page_match_distance)
+        if config.page_memory_enabled
+        else None
+    )
     previous_page_context: str | None = None
     controller.home()
     print("Camera loop started. Motors remain virtual until a verified driver adapter is added.")
@@ -84,7 +118,12 @@ def run_pi(config: AppConfig) -> None:
             if gate.observe(motion):
                 try:
                     accepted_page = accept_page_jpeg(
-                        controller, client, config, jpeg, previous_page_context
+                        controller,
+                        client,
+                        config,
+                        jpeg,
+                        previous_page_context,
+                        page_memory=page_memory,
                     )
                 except CloudVisionError as error:
                     # A cloud response must never terminate the camera loop or
@@ -108,7 +147,7 @@ def create_production_speaker(config: AppConfig) -> SpeechSink:
     if config.tts_provider == "openai":
         if not config.api_key:
             raise RuntimeError("TTS_PROVIDER=openai requires OPENAI_API_KEY")
-        return OpenAITtsSpeech(
+        cloud_speaker: OpenAITtsSpeech | OpenAIRealtimeSpeech = OpenAITtsSpeech(
             api_key=config.api_key,
             base_url=config.api_base_url,
             model=config.tts_model,
@@ -117,9 +156,23 @@ def create_production_speaker(config: AppConfig) -> SpeechSink:
             speed=config.tts_speed,
             timeout_s=config.tts_timeout_s,
         )
-    if config.tts_provider == "local":
+    elif config.tts_provider == "openai-realtime":
+        if not config.api_key:
+            raise RuntimeError("TTS_PROVIDER=openai-realtime requires OPENAI_API_KEY")
+        cloud_speaker = OpenAIRealtimeSpeech(
+            api_key=config.api_key,
+            model=config.tts_model,
+            voice=config.openai_tts_voice,
+            instructions=config.tts_instructions,
+            timeout_s=config.tts_timeout_s,
+        )
+    elif config.tts_provider == "local":
         return EspeakSpeech(config.tts_voice)
-    raise RuntimeError("TTS_PROVIDER must be 'local' or 'openai'")
+    else:
+        raise RuntimeError("TTS_PROVIDER must be 'local', 'openai', or 'openai-realtime'")
+    if config.page_memory_enabled:
+        return CachedAudioSpeech(PageMemory(config.page_memory_dir).audio_dir, cloud_speaker)
+    return cloud_speaker
 
 
 def _language_for_voice(voice: str) -> str:
@@ -136,6 +189,8 @@ def accept_page_jpeg(
     config: AppConfig,
     jpeg: bytes,
     previous_page_context: str | None = None,
+    *,
+    page_memory: PageMemory | None = None,
 ) -> AcceptedPage:
     """Run the production page-acceptance path for a stable JPEG frame.
 
@@ -145,6 +200,35 @@ def accept_page_jpeg(
     """
 
     started = monotonic()
+    if page_memory is not None:
+        try:
+            cached_page = page_memory.find(jpeg)
+        except (OSError, PageMemoryError) as error:
+            print(f"PAGE MEMORY: lookup skipped: {error}")
+        else:
+            if cached_page is not None:
+                speech_segments = cached_page.speech_segments
+                for segment in speech_segments[:-1]:
+                    controller.speaker.speak(segment)
+                controller.set_pending_story(speech_segments[-1])
+                timing_s = {"page_complete": round(monotonic() - started, 3), "cache_hit": 1.0}
+                print(f"PAGE MEMORY: cache hit {cached_page.page_id}; cloud vision skipped")
+                if cached_page.recognition:
+                    print(
+                        "Recognized visible text:\n"
+                        + str(cached_page.recognition.get("visible_text", "[no legible text returned]"))
+                    )
+                print("TTS segments:", len(speech_segments))
+                print("Narration to TTS:", " ".join(speech_segments))
+                print("Vision timing:", timing_s)
+                controller.handle(AppEvent.BOOK_STILL)
+                return AcceptedPage(
+                    next_context=cached_page.next_context,
+                    story_for_tts=" ".join(speech_segments),
+                    recognition=cached_page.recognition,
+                    speech_segments=speech_segments,
+                    timing_s=timing_s,
+                )
     early_speech = StreamingReadingStarter(controller.speaker) if config.cloud_enabled and config.cloud_stream else None
     if config.cloud_enabled:
         page = read_picture_book_page(
@@ -154,7 +238,7 @@ def accept_page_jpeg(
             previous_page_context=previous_page_context,
             on_output_text_delta=early_speech.feed if early_speech is not None else None,
         )
-        extension = page.get("teacher_story") or page.get("narration") or page["spoken_reading"]
+        extension = story_extension_for_tts(page, previous_page_context)
         speech_segments = ((early_speech.spoken_reading,) if early_speech and early_speech.spoken_reading else ()) + (extension,)
         story = extension
         next_context = page_context_for_next_page(page)
@@ -174,6 +258,17 @@ def accept_page_jpeg(
     print("Narration to TTS:", " ".join(speech_segments))
     print("Vision timing:", timing_s)
     controller.handle(AppEvent.BOOK_STILL)
+    if page_memory is not None:
+        try:
+            stored_page = page_memory.store(
+                jpeg,
+                recognition=page,
+                speech_segments=speech_segments,
+                next_context=next_context,
+            )
+            print(f"PAGE MEMORY: stored {stored_page.page_id}")
+        except (OSError, PageMemoryError) as error:
+            print(f"PAGE MEMORY: store skipped: {error}")
     return AcceptedPage(
         next_context=next_context,
         story_for_tts=" ".join(speech_segments),
@@ -187,7 +282,7 @@ def read_picture_book_page(
     client: StoryClient,
     jpeg: bytes,
     reply_language: str,
-    age_range: str = "3-7",
+    age_range: str = "about 2 years old",
     previous_page_context: str | None = None,
     on_output_text_delta: Callable[[str], None] | None = None,
 ) -> dict:
@@ -205,6 +300,87 @@ def read_picture_book_page(
     if not isinstance(page, dict) or not isinstance(page.get("spoken_reading"), str):
         raise CloudVisionError("picture-book model response lacked spoken_reading")
     return page
+
+
+def answer_child_question(
+    client: StoryClient,
+    speaker: SpeechSink,
+    config: AppConfig,
+    jpeg: bytes,
+    question: str,
+    pointed_object: str | None = None,
+    accepted_page_context: str | None = None,
+    reply_language: str | None = None,
+    previous_turn: ChildQuestionTurn | None = None,
+) -> ChildQuestionAnswer:
+    """Answer one child question without moving the lamp or advancing the story.
+
+    Microphone transcription and pointing recognition are hardware adapters.  This
+    production function receives their normalized text hints so the camera-free
+    test harness and the future live hardware path share the exact same cloud,
+    safety, and speech behavior.
+    """
+
+    if not question.strip():
+        raise ValueError("child question must not be empty")
+    requested_turn_language = detect_one_turn_reply_language(question)
+    language = (reply_language or requested_turn_language or config.question_reply_language).strip()
+    is_language_rephrase = requested_turn_language is not None and previous_turn is not None
+    raw = client.describe_page(
+        jpeg,
+        prompt=build_child_question_prompt(
+            question,
+            language,
+            pointed_object,
+            accepted_page_context,
+            previous_answer=previous_turn.last_answer if previous_turn else None,
+            is_language_rephrase=is_language_rephrase,
+        ),
+        system_instructions=CHILD_QUESTION_SYSTEM_INSTRUCTIONS,
+    )
+    try:
+        result = json.loads(raw)
+    except json.JSONDecodeError as error:
+        raise CloudVisionError("child-question model response was not valid JSON") from error
+    answer = result.get("answer") if isinstance(result, dict) else None
+    if not isinstance(answer, str) or not answer.strip():
+        raise CloudVisionError("child-question model response lacked answer")
+    spoken_answer = answer.strip()
+    speaker.speak(spoken_answer)
+    return ChildQuestionAnswer(spoken_answer, result, ChildQuestionTurn(spoken_answer))
+
+
+@dataclass
+class ChildQuestionSession:
+    """Production session state for a page's spoken child questions."""
+
+    client: StoryClient
+    speaker: SpeechSink
+    config: AppConfig
+    previous_turn: ChildQuestionTurn | None = None
+
+    def ask(
+        self,
+        jpeg: bytes,
+        question: str,
+        pointed_object: str | None = None,
+        accepted_page_context: str | None = None,
+    ) -> ChildQuestionAnswer:
+        result = answer_child_question(
+            self.client,
+            self.speaker,
+            self.config,
+            jpeg,
+            question,
+            pointed_object,
+            accepted_page_context,
+            previous_turn=self.previous_turn,
+        )
+        self.previous_turn = result.next_turn
+        return result
+
+    def reset_for_new_page(self) -> None:
+        self.previous_turn = None
 
 
 class StreamingReadingStarter:
@@ -243,6 +419,16 @@ def page_context_for_next_page(page: dict) -> str:
     description = str(page.get("image_description", "")).strip()
     context = f"Previous page visible text: {visible_text}\nPrevious page visible illustration: {description}"
     return context[:1200]
+
+
+def story_extension_for_tts(page: dict, previous_page_context: str | None = None) -> str:
+    """Keep a model-approved, relevant previous-page callback audible to the child."""
+
+    story = str(page.get("teacher_story") or page.get("narration") or page["spoken_reading"]).strip()
+    callback = str(page.get("continuity_callback") or "").strip()
+    if previous_page_context and callback:
+        return f"{callback} {story}".strip()
+    return story
 
 
 if __name__ == "__main__":

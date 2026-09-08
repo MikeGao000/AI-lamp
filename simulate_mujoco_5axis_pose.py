@@ -58,7 +58,14 @@ def play_trajectory(
 def main() -> None:
     model = mujoco.MjModel.from_xml_path(MODEL_PATH)
     data = mujoco.MjData(model)
-    sequence = ("look_left", "idle", "look_right", "idle", "nod_down", "idle", "reading_pose", "idle")
+    sequence = (
+        "look_left", "idle", "look_right", "idle",
+        "listening_pose", "idle",
+        "nod_up", "nod_down", "idle",
+        "curious_left", "curious_right", "idle",
+        "head_shake_left", "head_shake_right", "idle",
+        "reading_pose", "idle",
+    )
     targets = {"idle": IDLE_POSE, **POSE_LIBRARY}
     current = dict(IDLE_POSE)
     print("Five-axis pose loop: production limits + minimum-jerk trajectory; close the window to stop.")

@@ -53,7 +53,14 @@ def main() -> None:
     training, _ = split_by_transition(samples)
     policy = fit_minimum_jerk_imitation(training)
     poses = library_poses()
-    sequence = ("look_left", "idle", "look_right", "idle", "nod_down", "idle", "reading_pose", "idle")
+    sequence = (
+        "look_left", "idle", "look_right", "idle",
+        "listening_pose", "idle",
+        "nod_up", "nod_down", "idle",
+        "curious_left", "curious_right", "idle",
+        "head_shake_left", "head_shake_right", "idle",
+        "reading_pose", "idle",
+    )
     current = dict(poses["idle"])
     print("Trained-policy playback: all displayed joint commands come from the imitation model.")
     print("Learned blend: " + ", ".join(f"{value:+.6f}" for value in policy.coefficients))

@@ -3,7 +3,7 @@ import unittest
 from lamp_core.action_motion import ACTION_RECIPES, ActionMotionError, compile_action_to_ideal_segments
 from lamp_core.action_catalog import DEFAULT_ACTION_CATALOG
 from lamp_core.ideal_plant import verify_ideal_trajectory
-from lamp_core.pose_library import IDLE_POSE
+from lamp_core.pose_library import IDLE_POSE, POSE_LIBRARY
 from simulate import JOINT_LIMITS
 
 
@@ -28,3 +28,12 @@ class ActionMotionTests(unittest.TestCase):
         self.assertEqual((), scene.segments)
         with self.assertRaisesRegex(ActionMotionError, "unknown"):
             compile_action_to_ideal_segments("INVENT_NEW_MOVE", IDLE_POSE, JOINT_LIMITS)
+
+    def test_lelamp_motifs_use_the_matching_local_joint_groups(self):
+        self.assertEqual(("listening_pose",), ACTION_RECIPES["LISTENING_POSE"])
+        self.assertEqual(("nod_up", "nod_down", "idle"), ACTION_RECIPES["LELAMP_GREET_SMALL"])
+        self.assertEqual(("curious_left", "curious_right", "idle"), ACTION_RECIPES["LELAMP_CURIOUS_TILT"])
+        self.assertEqual(("head_shake_left", "head_shake_right", "idle"), ACTION_RECIPES["LELAMP_HEAD_SHAKE"])
+        # A shake is terminal-head yaw dominant; it must not turn into a body scan.
+        self.assertLess(abs(POSE_LIBRARY["head_shake_left"]["j1_base_yaw"]), 0.10)
+        self.assertGreater(abs(POSE_LIBRARY["head_shake_left"]["j5_head_yaw"]), 0.40)

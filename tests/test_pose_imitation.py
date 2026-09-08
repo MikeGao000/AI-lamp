@@ -16,7 +16,9 @@ class PoseImitationTests(unittest.TestCase):
         transition_ids = {sample.transition_index for sample in samples}
         pose_count = len(library_poses())
         self.assertEqual(pose_count * (pose_count - 1), len(transition_ids))
-        self.assertEqual(30, len(transition_ids))
+        # New locally calibrated expressive motifs must automatically become
+        # training demonstrations; do not freeze this test to a pose count.
+        self.assertGreater(len(transition_ids), 30)
 
     def test_policy_learns_held_out_minimum_jerk_transitions(self):
         samples = generate_pose_imitation_samples(JOINT_LIMITS)

@@ -30,18 +30,20 @@ class CompiledAction:
     segments: tuple[tuple[TrajectoryPoint, ...], ...]
 
 
-# Each expression is a composition of unchanged, already verified local poses.
+# Each expression is a composition of locally calibrated poses.  The
+# compositions borrow LeLamp's expressive joint *relationships* while keeping
+# this lamp's different J1--J5 axes and limits authoritative.
 ACTION_RECIPES: Mapping[str, tuple[str, ...]] = {
     "LOOK_LEFT": ("look_left",),
     "LOOK_CENTER": (),
     "LOOK_RIGHT": ("look_right",),
     "READING_POSTURE": ("reading_pose",),
-    "GENTLE_NOD": ("nod_down", "idle"),
-    "LISTENING_POSE": (),
-    "LELAMP_GREET_SMALL": ("nod_down", "idle"),
-    "LELAMP_CURIOUS_TILT": ("look_left", "look_right", "idle"),
-    "LELAMP_ACKNOWLEDGE": ("nod_down", "idle"),
-    "LELAMP_HEAD_SHAKE": ("look_left", "look_right", "idle"),
+    "GENTLE_NOD": ("nod_down", "nod_up", "idle"),
+    "LISTENING_POSE": ("listening_pose",),
+    "LELAMP_GREET_SMALL": ("nod_up", "nod_down", "idle"),
+    "LELAMP_CURIOUS_TILT": ("curious_left", "curious_right", "idle"),
+    "LELAMP_ACKNOWLEDGE": ("nod_down", "nod_up", "idle"),
+    "LELAMP_HEAD_SHAKE": ("head_shake_left", "head_shake_right", "idle"),
 }
 
 

@@ -1,0 +1,51 @@
+<!-- Interactive J1-only lamp model for MuJoCo. All angular values are radians. -->
+<mujoco model="lamp_j1_demo">
+  <compiler angle="radian"/>
+  <option timestep="0.002" gravity="0 0 -9.81"/>
+  <visual>
+    <global offwidth="1280" offheight="720"/>
+  </visual>
+  <default>
+    <!-- This first pose demo is kinematic: keep visual geometry out of contact solving. -->
+    <geom contype="0" conaffinity="0" friction="0.8 0.1 0.1"/>
+  </default>
+
+  <worldbody>
+    <geom name="desk" type="plane" size="2 2 0.1" rgba="0.12 0.12 0.12 1"/>
+    <light name="room_light" pos="0 -1 2" diffuse="0.8 0.8 0.8"/>
+
+    <body name="base" pos="0 0 0.04">
+      <geom name="base_shell" type="cylinder" size="0.14 0.04" mass="1.2"
+            rgba="0.18 0.20 0.24 1"/>
+
+      <body name="j1_rotor" pos="0 0 0.05">
+        <joint name="j1_base_yaw" type="hinge" axis="0 0 1"
+               range="-1.57 1.57" damping="1.2" armature="0.015"/>
+        <geom name="rotor" type="cylinder" size="0.075 0.035" mass="0.35"
+              rgba="0.32 0.36 0.42 1"/>
+
+        <body name="lamp_arm" pos="0 0 0.05">
+          <geom name="arm" type="capsule" fromto="0 0 0 0.34 0 0.22"
+                size="0.028" mass="0.45" rgba="0.72 0.74 0.78 1"/>
+          <body name="lamp_head" pos="0.34 0 0.22">
+            <geom name="head" type="ellipsoid" size="0.11 0.08 0.06" mass="0.3"
+                  rgba="0.92 0.72 0.22 1"/>
+            <camera name="lamp_camera" pos="0.07 0 0" xyaxes="0 -1 0 0 0 1"/>
+          </body>
+        </body>
+      </body>
+    </body>
+  </worldbody>
+
+  <actuator>
+    <!-- Interactive position target; scripted pose playback below uses the real motion planner. -->
+    <position name="j1_position" joint="j1_base_yaw" kp="4"
+              forcelimited="true" forcerange="-0.96 0.96"/>
+  </actuator>
+
+  <keyframe>
+    <key name="center" qpos="0"/>
+    <key name="look_left" qpos="0.8"/>
+    <key name="look_right" qpos="-0.8"/>
+  </keyframe>
+</mujoco>

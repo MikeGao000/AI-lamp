@@ -42,7 +42,7 @@ python -m venv .venv-mujoco
 
 该验证模型只包含独立的 J1 仿真关节，不连接 CAN、GPIO 或真实电机。下一阶段会在此环境中加载完整五轴台灯和相机/书本训练场景。
 
-完整五轴模型按实物轴心链布置：J1 底座水平旋转 → 5 cm 底部 U 型臂 → J2 肩部俯仰 → 12 cm 大臂 → J3 肘部俯仰 → 9 cm 小臂 → J4 颈部俯仰 → 5 cm 末端 U 型臂 → J5 灯头水平旋转。关节限位和 minimum-jerk 速度来自项目既有五轴姿态库。运行连续姿态演示：
+完整五轴模型按实物轴心链布置：J1 底座水平旋转 → 5 cm 底部 U 型臂 → J2 肩部俯仰 → 20 cm 大臂 → J3 肘部俯仰 → 9 cm 小臂 → J4 颈部俯仰 → 5 cm 末端 U 型臂 → J5 灯头水平旋转。五个关节均按 42 × 42 × 40 mm 步进电机外形建模；关节限位和 minimum-jerk 速度来自项目既有五轴姿态库。运行连续姿态演示：
 
 ```powershell
 .\.venv-mujoco\Scripts\python.exe simulate_mujoco_5axis_pose.py

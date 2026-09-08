@@ -70,6 +70,13 @@ class MuJoCoGeometrySpecTests(unittest.TestCase):
         self.assertEqual("0.065 0.050 0.040", head.attrib["size"])
         self.assertLessEqual(2 * float(head.attrib["size"].split()[1]), 0.105)
 
+    def test_lamp_head_sits_above_the_vertical_j5_yaw_motor(self):
+        j5_joint = named_element(self.root, "j5_head_yaw")
+        head = named_element(self.root, "lamp_head")
+        self.assertEqual("0 0 1", j5_joint.attrib["axis"])
+        self.assertEqual("0 0 0.075", head.attrib["pos"])
+        self.assertEqual("box", named_element(self.root, "head_riser").attrib["type"])
+
     def test_drag_sliders_are_bounded_by_existing_joint_ranges(self):
         expected_ranges = {
             "j1_position": "-1.57 1.57",

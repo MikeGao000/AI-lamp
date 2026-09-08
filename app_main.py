@@ -23,8 +23,16 @@ from lamp_core.question_prompt import (
     build_child_question_prompt,
     detect_one_turn_reply_language,
 )
+from lamp_core.page_memory import PageMemory, PageMemoryError
 from lamp_core.reading_prompt import PICTURE_BOOK_SYSTEM_INSTRUCTIONS, build_picture_book_prompt
-from lamp_core.speech import EspeakSpeech, OpenAIRealtimeSpeech, OpenAITtsSpeech, QueuedSpeech, SpeechSink
+from lamp_core.speech import (
+    CachedAudioSpeech,
+    EspeakSpeech,
+    OpenAIRealtimeSpeech,
+    OpenAITtsSpeech,
+    QueuedSpeech,
+    SpeechSink,
+)
 from lamp_core.vision import Picamera2FrameSource, StillnessGate
 from simulate_system import LIMITS
 from lamp_core.virtual_hardware import SpeechStub, VirtualMotorBus
@@ -94,6 +102,11 @@ def run_pi(config: AppConfig) -> None:
     speaker = QueuedSpeech(create_production_speaker(config))
     controller = ReadingCompanionCoordinator(LIMITS, VirtualMotorBus(LIMITS), speaker)
     client = cloud_client(config)
+    page_memory = (
+        PageMemory(config.page_memory_dir, match_distance=config.page_match_distance)
+        if config.page_memory_enabled
+        else None
+    )
     previous_page_context: str | None = None
     controller.home()
     print("Camera loop started. Motors remain virtual until a verified driver adapter is added.")
@@ -105,7 +118,12 @@ def run_pi(config: AppConfig) -> None:
             if gate.observe(motion):
                 try:
                     accepted_page = accept_page_jpeg(
-                        controller, client, config, jpeg, previous_page_context
+                        controller,
+                        client,
+                        config,
+                        jpeg,
+                        previous_page_context,
+                        page_memory=page_memory,
                     )
                 except CloudVisionError as error:
                     # A cloud response must never terminate the camera loop or
@@ -129,7 +147,7 @@ def create_production_speaker(config: AppConfig) -> SpeechSink:
     if config.tts_provider == "openai":
         if not config.api_key:
             raise RuntimeError("TTS_PROVIDER=openai requires OPENAI_API_KEY")
-        return OpenAITtsSpeech(
+        cloud_speaker: OpenAITtsSpeech | OpenAIRealtimeSpeech = OpenAITtsSpeech(
             api_key=config.api_key,
             base_url=config.api_base_url,
             model=config.tts_model,
@@ -138,19 +156,23 @@ def create_production_speaker(config: AppConfig) -> SpeechSink:
             speed=config.tts_speed,
             timeout_s=config.tts_timeout_s,
         )
-    if config.tts_provider == "openai-realtime":
+    elif config.tts_provider == "openai-realtime":
         if not config.api_key:
             raise RuntimeError("TTS_PROVIDER=openai-realtime requires OPENAI_API_KEY")
-        return OpenAIRealtimeSpeech(
+        cloud_speaker = OpenAIRealtimeSpeech(
             api_key=config.api_key,
             model=config.tts_model,
             voice=config.openai_tts_voice,
             instructions=config.tts_instructions,
             timeout_s=config.tts_timeout_s,
         )
-    if config.tts_provider == "local":
+    elif config.tts_provider == "local":
         return EspeakSpeech(config.tts_voice)
-    raise RuntimeError("TTS_PROVIDER must be 'local', 'openai', or 'openai-realtime'")
+    else:
+        raise RuntimeError("TTS_PROVIDER must be 'local', 'openai', or 'openai-realtime'")
+    if config.page_memory_enabled:
+        return CachedAudioSpeech(PageMemory(config.page_memory_dir).audio_dir, cloud_speaker)
+    return cloud_speaker
 
 
 def _language_for_voice(voice: str) -> str:
@@ -167,6 +189,8 @@ def accept_page_jpeg(
     config: AppConfig,
     jpeg: bytes,
     previous_page_context: str | None = None,
+    *,
+    page_memory: PageMemory | None = None,
 ) -> AcceptedPage:
     """Run the production page-acceptance path for a stable JPEG frame.
 
@@ -176,6 +200,35 @@ def accept_page_jpeg(
     """
 
     started = monotonic()
+    if page_memory is not None:
+        try:
+            cached_page = page_memory.find(jpeg)
+        except (OSError, PageMemoryError) as error:
+            print(f"PAGE MEMORY: lookup skipped: {error}")
+        else:
+            if cached_page is not None:
+                speech_segments = cached_page.speech_segments
+                for segment in speech_segments[:-1]:
+                    controller.speaker.speak(segment)
+                controller.set_pending_story(speech_segments[-1])
+                timing_s = {"page_complete": round(monotonic() - started, 3), "cache_hit": 1.0}
+                print(f"PAGE MEMORY: cache hit {cached_page.page_id}; cloud vision skipped")
+                if cached_page.recognition:
+                    print(
+                        "Recognized visible text:\n"
+                        + str(cached_page.recognition.get("visible_text", "[no legible text returned]"))
+                    )
+                print("TTS segments:", len(speech_segments))
+                print("Narration to TTS:", " ".join(speech_segments))
+                print("Vision timing:", timing_s)
+                controller.handle(AppEvent.BOOK_STILL)
+                return AcceptedPage(
+                    next_context=cached_page.next_context,
+                    story_for_tts=" ".join(speech_segments),
+                    recognition=cached_page.recognition,
+                    speech_segments=speech_segments,
+                    timing_s=timing_s,
+                )
     early_speech = StreamingReadingStarter(controller.speaker) if config.cloud_enabled and config.cloud_stream else None
     if config.cloud_enabled:
         page = read_picture_book_page(
@@ -205,6 +258,17 @@ def accept_page_jpeg(
     print("Narration to TTS:", " ".join(speech_segments))
     print("Vision timing:", timing_s)
     controller.handle(AppEvent.BOOK_STILL)
+    if page_memory is not None:
+        try:
+            stored_page = page_memory.store(
+                jpeg,
+                recognition=page,
+                speech_segments=speech_segments,
+                next_context=next_context,
+            )
+            print(f"PAGE MEMORY: stored {stored_page.page_id}")
+        except (OSError, PageMemoryError) as error:
+            print(f"PAGE MEMORY: store skipped: {error}")
     return AcceptedPage(
         next_context=next_context,
         story_for_tts=" ".join(speech_segments),

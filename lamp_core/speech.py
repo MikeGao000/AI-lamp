@@ -8,6 +8,7 @@ import tempfile
 import threading
 import wave
 import base64
+import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 from queue import Queue
@@ -19,6 +20,10 @@ from urllib.request import Request, urlopen
 
 class SpeechSink(Protocol):
     def speak(self, text: str) -> None: ...
+
+
+class SpeechSynthesizer(Protocol):
+    def synthesize(self, text: str) -> bytes: ...
 
 
 class CloudSpeechError(RuntimeError):
@@ -193,6 +198,59 @@ class OpenAIRealtimeSpeech:
             ],
             timeout=self.timeout_s,
         )
+
+
+@dataclass
+class CachedAudioSpeech:
+    """Cache generated WAV bytes locally, then play them without another API call."""
+
+    cache_dir: Path
+    client: SpeechSynthesizer
+    _lock: threading.Lock | None = None
+
+    def __post_init__(self) -> None:
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
+        if self._lock is None:
+            self._lock = threading.Lock()
+
+    def synthesize(self, text: str) -> bytes:
+        cleaned = text.strip()
+        if not cleaned:
+            raise CloudSpeechError("cannot synthesize empty text")
+        cache_key = self._cache_key(cleaned)
+        audio_path = self.cache_dir / f"{cache_key}.wav"
+        assert self._lock is not None
+        with self._lock:
+            if audio_path.is_file():
+                audio = audio_path.read_bytes()
+                if audio:
+                    return audio
+            audio = self.client.synthesize(cleaned)
+            temporary = audio_path.with_suffix(".wav.tmp")
+            temporary.write_bytes(audio)
+            temporary.replace(audio_path)
+            return audio
+
+    def speak(self, text: str) -> None:
+        audio = self.synthesize(text)
+        player = shutil.which("aplay")
+        if player is None:
+            raise RuntimeError("install alsa-utils to play cached speech on Raspberry Pi")
+        subprocess.run([player, "-q"], input=audio, check=True)
+
+    def _cache_key(self, text: str) -> str:
+        # Include every voice-setting field that changes the sound.  The API key
+        # is intentionally excluded so no secret reaches a filename or metadata.
+        identity = {
+            "adapter": type(self.client).__name__,
+            "model": getattr(self.client, "model", None),
+            "voice": getattr(self.client, "voice", None),
+            "instructions": getattr(self.client, "instructions", None),
+            "speed": getattr(self.client, "speed", None),
+            "text": text,
+        }
+        encoded = json.dumps(identity, ensure_ascii=False, sort_keys=True).encode("utf-8")
+        return hashlib.sha256(encoded).hexdigest()
 
 
 class QueuedSpeech:

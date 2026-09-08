@@ -7,7 +7,12 @@ from pathlib import Path
 from unittest.mock import patch
 
 from lamp_core.cloud import OpenAIResponsesVisionClient
-from lamp_core.speech import OpenAIRealtimeSpeech, OpenAITtsSpeech, _combine_wav_files
+from lamp_core.speech import (
+    CachedAudioSpeech,
+    OpenAIRealtimeSpeech,
+    OpenAITtsSpeech,
+    _combine_wav_files,
+)
 
 
 def wav_bytes() -> bytes:
@@ -55,7 +60,29 @@ class FakeRealtimeSocket:
         self.closed = True
 
 
+class CountingSynthesizer:
+    model = "test-model"
+    voice = "test-voice"
+    instructions = "test-instructions"
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def synthesize(self, text: str) -> bytes:
+        self.calls += 1
+        return wav_bytes()
+
+
 class OpenAIStreamingAndTtsTests(unittest.TestCase):
+    def test_cached_audio_synthesizes_each_utterance_only_once(self):
+        client = CountingSynthesizer()
+        with tempfile.TemporaryDirectory() as directory:
+            cached = CachedAudioSpeech(Path(directory), client)
+            self.assertEqual(wav_bytes(), cached.synthesize("Hej lille bjørn"))
+            self.assertEqual(wav_bytes(), cached.synthesize("Hej lille bjørn"))
+            self.assertEqual(1, client.calls)
+            self.assertEqual(1, len(list(Path(directory).glob("*.wav"))))
+
     def test_collects_text_deltas_and_calls_early_callback(self):
         output = []
         response = FakeResponse(

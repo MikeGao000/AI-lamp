@@ -46,6 +46,9 @@ class AppConfig:
     cloud_stream: bool
     cloud_reasoning_effort: str
     cloud_max_output_tokens: int
+    page_memory_enabled: bool = True
+    page_memory_dir: str = "data/picture-book-library"
+    page_match_distance: int = 7
 
     @classmethod
     def from_environment(cls) -> "AppConfig":
@@ -80,4 +83,7 @@ class AppConfig:
             cloud_stream=_bool(os.getenv("CLOUD_STREAM", "true")),
             cloud_reasoning_effort=os.getenv("CLOUD_REASONING_EFFORT", "none"),
             cloud_max_output_tokens=int(os.getenv("CLOUD_MAX_OUTPUT_TOKENS", "700")),
+            page_memory_enabled=_bool(os.getenv("PAGE_MEMORY_ENABLED", "true")),
+            page_memory_dir=os.getenv("PAGE_MEMORY_DIR", "data/picture-book-library"),
+            page_match_distance=int(os.getenv("PAGE_MATCH_DISTANCE", "7")),
         )

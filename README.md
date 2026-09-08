@@ -143,6 +143,10 @@ python3 app_main.py --mode pi
 
 云端接口遵循 [OpenAI Responses API](https://developers.openai.com/api/reference/cli/resources/responses/methods/create)，以 JPEG data URL 发送稳定页面，并设置 `store: false`。该客户端在未启用云端或未配置密钥时不会发出网络请求。
 
+主程序默认启用 Pi 本地绘本记忆，保存在 `data/picture-book-library/`：`pages/` 保存首次接受的页面照片、结构化识别结果、朗读文本及少量近似视角样本，`audio/` 保存由当前模型、音色和提示词生成的 WAV。再次看到相同页面时，程序用感知指纹容忍小幅光线/角度变化，直接复述缓存内容并播放缓存语音，不再调用页面视觉模型或 TTS；孩子提出的新问题仍走独立问答模型。缓存不会提交到 Git。
+
+可在 `.env` 中设置 `PAGE_MEMORY_ENABLED=false` 临时关闭，或用 `PAGE_MEMORY_DIR` 改变存储位置。`PAGE_MATCH_DISTANCE` 默认是经保护的 `7`；程序只会把距离更近的可靠变体加入样本，避免边界误匹配导致记忆逐步漂移。
+
 ## 不可跳过的硬件前置条件
 
 1. 每一轴有独立的硬限位或可靠的回零方案，并在低速、低电流下逐轴验证。

@@ -26,6 +26,7 @@ COMPONENT_TEST_PATTERNS: dict[str, tuple[str, ...]] = {
         "test_cloud.py",
         "test_child_questions.py",
         "test_openai_streaming_tts.py",
+        "test_page_memory.py",
         "test_reading_prompt.py",
         "test_vision.py",
     ),
@@ -84,6 +85,10 @@ def write_report(path: Path, profile: str, stages: list[StageResult]) -> None:
 
 
 def main() -> int:
+    # Keep Danish/Chinese diagnostic output from crashing legacy Windows
+    # PowerShell consoles while preserving test failures and exit codes.
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(errors="backslashreplace")
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--profile",

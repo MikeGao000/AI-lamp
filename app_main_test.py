@@ -17,7 +17,9 @@ from app_main import accept_page_jpeg, cloud_client
 from lamp_core.cloud import CloudVisionError
 from lamp_core.config import AppConfig, load_dotenv
 from lamp_core.coordinator import AppEvent, ReadingCompanionCoordinator
+from lamp_core.page_memory import PageMemory
 from lamp_core.speech import (
+    CachedAudioSpeech,
     OpenAIRealtimeSpeech,
     OpenAIRealtimeWavFileSpeech,
     OpenAITtsSpeech,
@@ -48,6 +50,11 @@ def run_image_hardware_substitution_test(
     wav_path.parent.mkdir(parents=True, exist_ok=True)
 
     speaker = create_test_speaker(config, wav_path)
+    page_memory = (
+        PageMemory(config.page_memory_dir, match_distance=config.page_match_distance)
+        if config.page_memory_enabled
+        else None
+    )
     controller = ReadingCompanionCoordinator(LIMITS, VirtualMotorBus(LIMITS), speaker)
     controller.home()
     controller.handle(AppEvent.BOOK_MOVED)
@@ -57,6 +64,7 @@ def run_image_hardware_substitution_test(
         config,
         jpeg,
         previous_page_context=previous_page_context,
+        page_memory=page_memory,
     )
     speaker.finalize()
     result_json_path.parent.mkdir(parents=True, exist_ok=True)
@@ -88,33 +96,37 @@ def create_test_speaker(
     if config.tts_provider == "openai":
         if not config.api_key:
             raise RuntimeError("TTS_PROVIDER=openai requires OPENAI_API_KEY")
-        return OpenAIWavFileSpeech(
-            wav_path,
-            OpenAITtsSpeech(
-                api_key=config.api_key,
-                base_url=config.api_base_url,
-                model=config.tts_model,
-                voice=config.openai_tts_voice,
-                instructions=config.tts_instructions,
-                speed=config.tts_speed,
-                timeout_s=config.tts_timeout_s,
-            ),
+        synthesizer = OpenAITtsSpeech(
+            api_key=config.api_key,
+            base_url=config.api_base_url,
+            model=config.tts_model,
+            voice=config.openai_tts_voice,
+            instructions=config.tts_instructions,
+            speed=config.tts_speed,
+            timeout_s=config.tts_timeout_s,
         )
+        if config.page_memory_enabled:
+            synthesizer = CachedAudioSpeech(
+                PageMemory(config.page_memory_dir).audio_dir, synthesizer
+            )
+        return OpenAIWavFileSpeech(wav_path, synthesizer)
     if config.tts_provider == "local":
         return WavFileSpeech(wav_path, config.tts_voice)
     if config.tts_provider == "openai-realtime":
         if not config.api_key:
             raise RuntimeError("TTS_PROVIDER=openai-realtime requires OPENAI_API_KEY")
-        return OpenAIRealtimeWavFileSpeech(
-            wav_path,
-            OpenAIRealtimeSpeech(
-                api_key=config.api_key,
-                model=config.tts_model,
-                voice=config.openai_tts_voice,
-                instructions=config.tts_instructions,
-                timeout_s=config.tts_timeout_s,
-            ),
+        synthesizer = OpenAIRealtimeSpeech(
+            api_key=config.api_key,
+            model=config.tts_model,
+            voice=config.openai_tts_voice,
+            instructions=config.tts_instructions,
+            timeout_s=config.tts_timeout_s,
         )
+        if config.page_memory_enabled:
+            synthesizer = CachedAudioSpeech(
+                PageMemory(config.page_memory_dir).audio_dir, synthesizer
+            )
+        return OpenAIRealtimeWavFileSpeech(wav_path, synthesizer)
     raise RuntimeError("TTS_PROVIDER must be 'local', 'openai', or 'openai-realtime'")
 
 

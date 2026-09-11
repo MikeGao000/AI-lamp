@@ -20,12 +20,14 @@ from lamp_core.mks_can_protocol import CanFrame, ChecksumMode, set_bus_enabled
 from lamp_core.mks_single_axis import (
     COUNTS_PER_REVOLUTION,
     EXPRESSIVE_DIRECT_SPEED_CURVE,
+    EXPRESSIVE_GEARED_SPEED_CURVE,
     FAST_GEARED_SPEED_CURVE,
     GEARED_SPEED_CURVE,
     MAX_INITIAL_DELTA_COUNTS,
     MAX_INITIAL_OUTPUT_DEGREES,
     MAX_INITIAL_SPEED_RPM,
     MAX_GEARED_TEST_SPEED_RPM,
+    MAX_EXPRESSIVE_GEARED_SPEED_RPM,
     MAX_TEST_SPEED_RPM,
     CanTransport,
     GENTLE_SPEED_CURVE,
@@ -84,7 +86,7 @@ def parser() -> argparse.ArgumentParser:
     )
     result.add_argument(
         "--profile",
-        choices=("constant", "curve", "fast-curve", "expressive"),
+        choices=("constant", "curve", "fast-curve", "expressive", "expressive-geared"),
         default="constant",
         help="constant uses --speed-rpm/--acceleration; curve profiles stream live F5 speed updates",
     )
@@ -123,6 +125,11 @@ def main() -> int:
             parser().error("--profile expressive is the direct-drive J1 gesture; omit --gear-ratio or use 1")
         curve = EXPRESSIVE_DIRECT_SPEED_CURVE
         max_speed_rpm = MAX_TEST_SPEED_RPM
+    elif args.profile == "expressive-geared":
+        if not geared:
+            parser().error("--profile expressive-geared requires --gear-ratio greater than 1")
+        curve = EXPRESSIVE_GEARED_SPEED_CURVE
+        max_speed_rpm = MAX_EXPRESSIVE_GEARED_SPEED_RPM
     elif args.profile == "fast-curve":
         if not geared:
             parser().error("--profile fast-curve requires an explicit reduction --gear-ratio greater than 1")
@@ -139,7 +146,7 @@ def main() -> int:
     print(f"gear ratio: {args.gear_ratio:g}:1; output equivalent: {delta_counts / COUNTS_PER_REVOLUTION * 360 / args.gear_ratio:.2f}°")
     if args.joint_degrees is not None:
         print(f"requested output angle: {args.joint_degrees:g}° (limit ±{MAX_INITIAL_OUTPUT_DEGREES:g}°)")
-    if args.profile in ("curve", "fast-curve", "expressive"):
+    if args.profile in ("curve", "fast-curve", "expressive", "expressive-geared"):
         print(
             "live speed curve:",
             " -> ".join(f"{stage.speed_rpm} RPM / acc {stage.acceleration}" for stage in curve),
@@ -172,7 +179,7 @@ def main() -> int:
         for segment_index, (kind, value) in enumerate(plan, start=1):
             label = "fixed target" if kind == "target" else "relative delta"
             print(f"segment {segment_index}/{len(plan)}: {label} {value:+d} counts")
-            if args.profile in ("curve", "fast-curve", "expressive"):
+            if args.profile in ("curve", "fast-curve", "expressive", "expressive-geared"):
                 if kind == "target":
                     result = probe.move_absolute_with_speed_curve_for_initial_test(
                         target_counts=value,

@@ -6,9 +6,11 @@ from lamp_core.mks_single_axis import (
     GEARED_SPEED_CURVE,
     FAST_GEARED_SPEED_CURVE,
     EXPRESSIVE_DIRECT_SPEED_CURVE,
+    EXPRESSIVE_GEARED_SPEED_CURVE,
     MAX_INITIAL_DELTA_COUNTS,
     MAX_GEARED_TEST_SPEED_RPM,
     MAX_TEST_SPEED_RPM,
+    MAX_EXPRESSIVE_GEARED_SPEED_RPM,
     motor_counts_for_joint_degrees,
     MotionStage,
     MksSingleAxisProbe,
@@ -172,6 +174,10 @@ class MksSingleAxisProbeTests(unittest.TestCase):
     def test_expressive_direct_curve_has_a_slow_fast_slow_shape(self):
         self.assertEqual([18, 180, 28], [stage.speed_rpm for stage in EXPRESSIVE_DIRECT_SPEED_CURVE])
         self.assertEqual(MAX_TEST_SPEED_RPM, max(stage.speed_rpm for stage in EXPRESSIVE_DIRECT_SPEED_CURVE))
+
+    def test_expressive_geared_curve_keeps_a_lively_output_speed_after_reduction(self):
+        self.assertEqual([25, 160, 360, 50], [stage.speed_rpm for stage in EXPRESSIVE_GEARED_SPEED_CURVE])
+        self.assertEqual(MAX_EXPRESSIVE_GEARED_SPEED_RPM, max(stage.speed_rpm for stage in EXPRESSIVE_GEARED_SPEED_CURVE))
 
     def test_probe_rejects_a_larger_than_quarter_revolution_step(self):
         probe = MksSingleAxisProbe(FakeCanTransport(()), 1, ChecksumMode.ADDITIVE)

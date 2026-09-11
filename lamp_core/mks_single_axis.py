@@ -29,6 +29,7 @@ MAX_INITIAL_DELTA_COUNTS = 4_096
 MAX_INITIAL_SPEED_RPM = 10
 MAX_GEARED_TEST_SPEED_RPM = 120
 MAX_TEST_SPEED_RPM = 180
+MAX_EXPRESSIVE_GEARED_SPEED_RPM = 360
 MAX_INITIAL_OUTPUT_DEGREES = 90.0
 # The MKS encoder and RPM reports are integral-valued.  A closed-loop axis can
 # legitimately settle a few counts either side of the requested coordinate and
@@ -82,6 +83,16 @@ EXPRESSIVE_DIRECT_SPEED_CURVE: tuple[MotionStage, ...] = (
     MotionStage(speed_rpm=18, acceleration=96, hold_s=0.05),
     MotionStage(speed_rpm=180, acceleration=250, hold_s=0.12),
     MotionStage(speed_rpm=28, acceleration=160, hold_s=0.0),
+)
+
+# The intended 13.7:1 J1 configuration needs substantially more motor RPM
+# than direct drive to retain a lively lamp gesture.  Peak 360 motor RPM is
+# about 26.3 RPM at the output joint.
+EXPRESSIVE_GEARED_SPEED_CURVE: tuple[MotionStage, ...] = (
+    MotionStage(speed_rpm=25, acceleration=128, hold_s=0.08),
+    MotionStage(speed_rpm=160, acceleration=235, hold_s=0.12),
+    MotionStage(speed_rpm=360, acceleration=250, hold_s=0.20),
+    MotionStage(speed_rpm=50, acceleration=180, hold_s=0.0),
 )
 
 
@@ -273,8 +284,9 @@ class MksSingleAxisProbe:
             raise ValueError(f"initial delta must be within ±{max_delta_counts} encoder counts")
         if not stages:
             raise ValueError("at least one motion stage is required")
-        if not 1 <= max_speed_rpm <= MAX_TEST_SPEED_RPM:
-            raise ValueError(f"maximum stage speed must be within 1..{MAX_TEST_SPEED_RPM} RPM")
+        maximum_supported_speed = max(MAX_TEST_SPEED_RPM, MAX_EXPRESSIVE_GEARED_SPEED_RPM)
+        if not 1 <= max_speed_rpm <= maximum_supported_speed:
+            raise ValueError(f"maximum stage speed must be within 1..{maximum_supported_speed} RPM")
         for stage in stages:
             if not 1 <= stage.speed_rpm <= max_speed_rpm:
                 raise ValueError(f"stage speed must be within 1..{max_speed_rpm} RPM")

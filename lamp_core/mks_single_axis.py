@@ -87,6 +87,14 @@ def alternating_cycle_deltas(delta_counts: int, cycles: int) -> tuple[int, ...]:
     return tuple(segment for _ in range(cycles) for segment in (delta_counts, -delta_counts))
 
 
+def anchored_cycle_targets(anchor_counts: int, delta_counts: int, cycles: int) -> tuple[int, ...]:
+    """Return fixed B/A endpoints for repeatability cycles anchored at A."""
+    if cycles < 1:
+        raise ValueError("cycles must be at least 1")
+    endpoint_b = anchor_counts + delta_counts
+    return tuple(target for _ in range(cycles) for target in (endpoint_b, anchor_counts))
+
+
 def motor_counts_for_joint_degrees(joint_degrees: float, gear_ratio: float) -> int:
     """Convert an output-joint displacement to MKS motor encoder counts."""
     if gear_ratio < 1:
@@ -172,6 +180,7 @@ class MksSingleAxisProbe:
         """
         return self._move_relative_with_stages(
             delta_counts=delta_counts,
+            target_counts=None,
             stages=(MotionStage(speed_rpm, acceleration, 0.0),),
             timeout_s=timeout_s,
             max_speed_rpm=max_speed_rpm,
@@ -190,6 +199,46 @@ class MksSingleAxisProbe:
         """Move one bounded increment while updating MKS F5 speed in flight."""
         return self._move_relative_with_stages(
             delta_counts=delta_counts,
+            target_counts=None,
+            stages=stages,
+            timeout_s=timeout_s,
+            max_speed_rpm=max_speed_rpm,
+            max_delta_counts=max_delta_counts,
+        )
+
+    def move_absolute_for_initial_test(
+        self,
+        *,
+        target_counts: int,
+        speed_rpm: int = MAX_INITIAL_SPEED_RPM,
+        acceleration: int = 1,
+        timeout_s: float = 15.0,
+        max_speed_rpm: int = MAX_INITIAL_SPEED_RPM,
+        max_delta_counts: int = MAX_INITIAL_DELTA_COUNTS,
+    ) -> MotionResult:
+        """Move to a fixed encoder coordinate, retaining a bounded travel check."""
+        return self._move_relative_with_stages(
+            delta_counts=None,
+            target_counts=target_counts,
+            stages=(MotionStage(speed_rpm, acceleration, 0.0),),
+            timeout_s=timeout_s,
+            max_speed_rpm=max_speed_rpm,
+            max_delta_counts=max_delta_counts,
+        )
+
+    def move_absolute_with_speed_curve_for_initial_test(
+        self,
+        *,
+        target_counts: int,
+        stages: Sequence[MotionStage] = GENTLE_SPEED_CURVE,
+        timeout_s: float = 15.0,
+        max_speed_rpm: int = MAX_INITIAL_SPEED_RPM,
+        max_delta_counts: int = MAX_INITIAL_DELTA_COUNTS,
+    ) -> MotionResult:
+        """Apply live F5 updates while converging on one fixed encoder target."""
+        return self._move_relative_with_stages(
+            delta_counts=None,
+            target_counts=target_counts,
             stages=stages,
             timeout_s=timeout_s,
             max_speed_rpm=max_speed_rpm,
@@ -199,15 +248,18 @@ class MksSingleAxisProbe:
     def _move_relative_with_stages(
         self,
         *,
-        delta_counts: int,
+        delta_counts: int | None,
+        target_counts: int | None,
         stages: Sequence[MotionStage],
         timeout_s: float,
         max_speed_rpm: int,
         max_delta_counts: int,
     ) -> MotionResult:
+        if (delta_counts is None) == (target_counts is None):
+            raise ValueError("specify exactly one of delta_counts or target_counts")
         if not 1 <= max_delta_counts <= 2**23 - 1:
             raise ValueError("maximum delta must fit the MKS signed-int24 coordinate range")
-        if not 1 <= abs(delta_counts) <= max_delta_counts:
+        if delta_counts is not None and not 1 <= abs(delta_counts) <= max_delta_counts:
             raise ValueError(f"initial delta must be within ±{max_delta_counts} encoder counts")
         if not stages:
             raise ValueError("at least one motion stage is required")
@@ -227,9 +279,11 @@ class MksSingleAxisProbe:
                 f"node {self._node_id} is already moving at {before.rpm} RPM; "
                 "stop it and confirm a stationary encoder before this initial probe"
             )
-        target = before.encoder_counts + delta_counts
+        target = target_counts if target_counts is not None else before.encoder_counts + delta_counts
         if not -(2**23) <= target <= 2**23 - 1:
             raise ValueError("target coordinate exceeds MKS absolute-coordinate range")
+        if target_counts is not None and abs(target - before.encoder_counts) > max_delta_counts + POSITION_SETTLE_TOLERANCE_COUNTS:
+            raise ValueError("fixed target is beyond the configured bounded travel")
 
         self._transport.send(set_bus_enabled(self._node_id, True, self._checksum_mode))
         for stage in stages:

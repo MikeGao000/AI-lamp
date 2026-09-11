@@ -28,7 +28,7 @@ from lamp_core.mks_single_axis import (
     CanTransport,
     GENTLE_SPEED_CURVE,
     MksSingleAxisProbe,
-    alternating_cycle_deltas,
+    anchored_cycle_targets,
     motor_counts_for_joint_degrees,
 )
 
@@ -115,7 +115,6 @@ def main() -> int:
     if args.cycles < 0:
         parser().error("--cycles must be zero (one-way test) or a positive number of forward/reverse cycles")
 
-    deltas = (delta_counts,) if args.cycles == 0 else alternating_cycle_deltas(delta_counts, args.cycles)
     geared = args.gear_ratio > 1.0
     max_speed_rpm = MAX_GEARED_TEST_SPEED_RPM if geared else MAX_INITIAL_SPEED_RPM
     if args.profile == "fast-curve":
@@ -142,7 +141,7 @@ def main() -> int:
         print(f"speed: {args.speed_rpm} RPM; acceleration: {args.acceleration}")
     print(f"checksum: {mode.value}")
     if args.cycles:
-        print(f"repeatability run: {args.cycles} forward/reverse cycles ({len(deltas)} motion segments)")
+        print(f"repeatability run: {args.cycles} fixed-endpoint forward/reverse cycles ({args.cycles * 2} motion segments)")
     print("enable frame:", set_bus_enabled(args.node_id, True, mode))
     print("motion frame is calculated from the encoder position read immediately before execution.")
     if not args.execute:
@@ -150,27 +149,57 @@ def main() -> int:
         return 0
 
     transport = SocketCanTransport(args.interface)
+    results = []
+    cycle_anchor = None
     try:
         probe = MksSingleAxisProbe(transport, args.node_id, mode)
-        for segment_index, delta_counts in enumerate(deltas, start=1):
-            print(f"segment {segment_index}/{len(deltas)}: {delta_counts:+d} counts")
+        if args.cycles:
+            cycle_anchor = probe.snapshot()
+            fixed_targets = anchored_cycle_targets(cycle_anchor.encoder_counts, delta_counts, args.cycles)
+            print(f"fixed endpoint A: {cycle_anchor.encoder_counts}; B: {cycle_anchor.encoder_counts + delta_counts}")
+            plan = tuple(("target", target) for target in fixed_targets)
+        else:
+            plan = (("delta", delta_counts),)
+
+        for segment_index, (kind, value) in enumerate(plan, start=1):
+            label = "fixed target" if kind == "target" else "relative delta"
+            print(f"segment {segment_index}/{len(plan)}: {label} {value:+d} counts")
             if args.profile in ("curve", "fast-curve"):
-                result = probe.move_relative_with_speed_curve_for_initial_test(
-                    delta_counts=delta_counts,
-                    stages=curve,
-                    timeout_s=args.timeout_s,
-                    max_speed_rpm=max_speed_rpm,
-                    max_delta_counts=max_delta_counts,
-                )
+                if kind == "target":
+                    result = probe.move_absolute_with_speed_curve_for_initial_test(
+                        target_counts=value,
+                        stages=curve,
+                        timeout_s=args.timeout_s,
+                        max_speed_rpm=max_speed_rpm,
+                        max_delta_counts=max_delta_counts,
+                    )
+                else:
+                    result = probe.move_relative_with_speed_curve_for_initial_test(
+                        delta_counts=value,
+                        stages=curve,
+                        timeout_s=args.timeout_s,
+                        max_speed_rpm=max_speed_rpm,
+                        max_delta_counts=max_delta_counts,
+                    )
             else:
-                result = probe.move_relative_for_initial_test(
-                    delta_counts=delta_counts,
-                    speed_rpm=args.speed_rpm,
-                    acceleration=args.acceleration,
-                    timeout_s=args.timeout_s,
-                    max_speed_rpm=max_speed_rpm,
-                    max_delta_counts=max_delta_counts,
-                )
+                if kind == "target":
+                    result = probe.move_absolute_for_initial_test(
+                        target_counts=value,
+                        speed_rpm=args.speed_rpm,
+                        acceleration=args.acceleration,
+                        timeout_s=args.timeout_s,
+                        max_speed_rpm=max_speed_rpm,
+                        max_delta_counts=max_delta_counts,
+                    )
+                else:
+                    result = probe.move_relative_for_initial_test(
+                        delta_counts=value,
+                        speed_rpm=args.speed_rpm,
+                        acceleration=args.acceleration,
+                        timeout_s=args.timeout_s,
+                        max_speed_rpm=max_speed_rpm,
+                        max_delta_counts=max_delta_counts,
+                    )
             print("before:", result.before)
             print("target encoder:", result.target_counts)
             print("after:", result.after)
@@ -178,9 +207,15 @@ def main() -> int:
             if not result.reached_target:
                 print(f"FAIL: segment {segment_index} did not reach its target before timeout.")
                 return 2
+            results.append(result)
     finally:
         transport.close()
-    print(f"PASS: {len(deltas)} segment(s) settled within the MKS feedback tolerance.")
+    if cycle_anchor is not None:
+        errors = [result.position_error_counts for result in results]
+        net_drift = results[-1].after.encoder_counts - cycle_anchor.encoder_counts
+        print(f"cycle summary: anchor A={cycle_anchor.encoder_counts}; final={results[-1].after.encoder_counts}; net drift={net_drift} counts")
+        print(f"cycle summary: max |segment error|={max(abs(error) for error in errors)} counts; mean segment error={sum(errors) / len(errors):.2f} counts")
+    print(f"PASS: {len(results)} segment(s) settled within the MKS feedback tolerance.")
     return 0
 
 

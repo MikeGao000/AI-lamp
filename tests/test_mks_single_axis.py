@@ -11,6 +11,7 @@ from lamp_core.mks_single_axis import (
     MotionStage,
     MksSingleAxisProbe,
     alternating_cycle_deltas,
+    anchored_cycle_targets,
 )
 
 
@@ -43,6 +44,11 @@ class MksSingleAxisProbeTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "at least 1"):
             alternating_cycle_deltas(4096, 0)
 
+    def test_anchored_cycles_repeat_the_same_absolute_a_and_b_endpoints(self):
+        self.assertEqual((4196, 100) * 3, anchored_cycle_targets(100, 4096, 3))
+        with self.assertRaisesRegex(ValueError, "at least 1"):
+            anchored_cycle_targets(100, 4096, 0)
+
     def test_probe_refuses_to_join_a_motor_already_in_motion(self):
         transport = FakeCanTransport((
             reply(1, 0x31, 100, 6), reply(1, 0x32, 3, 2),
@@ -68,6 +74,18 @@ class MksSingleAxisProbeTests(unittest.TestCase):
         self.assertEqual(4196, result.target_counts)
         self.assertEqual(0xF3, transport.sent[2].data[0])
         self.assertEqual(0xF5, transport.sent[3].data[0])
+        self.assertEqual(4196, int.from_bytes(transport.sent[3].data[4:7], "big", signed=True))
+
+    def test_absolute_probe_keeps_the_requested_endpoint_when_feedback_is_short(self):
+        transport = FakeCanTransport((
+            reply(1, 0x31, 100, 6), reply(1, 0x32, 0, 2),
+            reply(1, 0x31, 4192, 6), reply(1, 0x32, -1, 2),
+        ))
+        probe = MksSingleAxisProbe(transport, 1, ChecksumMode.ADDITIVE)
+        result = probe.move_absolute_for_initial_test(target_counts=4196)
+
+        self.assertTrue(result.reached_target)
+        self.assertEqual(4196, result.target_counts)
         self.assertEqual(4196, int.from_bytes(transport.sent[3].data[4:7], "big", signed=True))
 
     def test_probe_accepts_the_documented_encoder_and_rpm_settle_tolerance(self):

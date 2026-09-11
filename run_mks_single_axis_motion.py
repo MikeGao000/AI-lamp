@@ -19,12 +19,14 @@ from dataclasses import dataclass
 from lamp_core.mks_can_protocol import CanFrame, ChecksumMode, set_bus_enabled
 from lamp_core.mks_single_axis import (
     COUNTS_PER_REVOLUTION,
+    EXPRESSIVE_DIRECT_SPEED_CURVE,
     FAST_GEARED_SPEED_CURVE,
     GEARED_SPEED_CURVE,
     MAX_INITIAL_DELTA_COUNTS,
     MAX_INITIAL_OUTPUT_DEGREES,
     MAX_INITIAL_SPEED_RPM,
     MAX_GEARED_TEST_SPEED_RPM,
+    MAX_TEST_SPEED_RPM,
     CanTransport,
     GENTLE_SPEED_CURVE,
     MksSingleAxisProbe,
@@ -82,9 +84,9 @@ def parser() -> argparse.ArgumentParser:
     )
     result.add_argument(
         "--profile",
-        choices=("constant", "curve", "fast-curve"),
+        choices=("constant", "curve", "fast-curve", "expressive"),
         default="constant",
-        help="constant uses --speed-rpm/--acceleration; curve and fast-curve stream live F5 speed updates",
+        help="constant uses --speed-rpm/--acceleration; curve profiles stream live F5 speed updates",
     )
     result.add_argument(
         "--cycles",
@@ -116,13 +118,19 @@ def main() -> int:
         parser().error("--cycles must be zero (one-way test) or a positive number of forward/reverse cycles")
 
     geared = args.gear_ratio > 1.0
-    max_speed_rpm = MAX_GEARED_TEST_SPEED_RPM if geared else MAX_INITIAL_SPEED_RPM
-    if args.profile == "fast-curve":
+    if args.profile == "expressive":
+        if geared:
+            parser().error("--profile expressive is the direct-drive J1 gesture; omit --gear-ratio or use 1")
+        curve = EXPRESSIVE_DIRECT_SPEED_CURVE
+        max_speed_rpm = MAX_TEST_SPEED_RPM
+    elif args.profile == "fast-curve":
         if not geared:
             parser().error("--profile fast-curve requires an explicit reduction --gear-ratio greater than 1")
         curve = FAST_GEARED_SPEED_CURVE
+        max_speed_rpm = MAX_GEARED_TEST_SPEED_RPM
     else:
         curve = GEARED_SPEED_CURVE if geared else GENTLE_SPEED_CURVE
+        max_speed_rpm = MAX_GEARED_TEST_SPEED_RPM if geared else MAX_INITIAL_SPEED_RPM
     if not 1 <= args.speed_rpm <= max_speed_rpm:
         parser().error(f"--speed-rpm must be within 1..{max_speed_rpm} for this drive configuration")
 
@@ -131,7 +139,7 @@ def main() -> int:
     print(f"gear ratio: {args.gear_ratio:g}:1; output equivalent: {delta_counts / COUNTS_PER_REVOLUTION * 360 / args.gear_ratio:.2f}°")
     if args.joint_degrees is not None:
         print(f"requested output angle: {args.joint_degrees:g}° (limit ±{MAX_INITIAL_OUTPUT_DEGREES:g}°)")
-    if args.profile in ("curve", "fast-curve"):
+    if args.profile in ("curve", "fast-curve", "expressive"):
         print(
             "live speed curve:",
             " -> ".join(f"{stage.speed_rpm} RPM / acc {stage.acceleration}" for stage in curve),
@@ -164,7 +172,7 @@ def main() -> int:
         for segment_index, (kind, value) in enumerate(plan, start=1):
             label = "fixed target" if kind == "target" else "relative delta"
             print(f"segment {segment_index}/{len(plan)}: {label} {value:+d} counts")
-            if args.profile in ("curve", "fast-curve"):
+            if args.profile in ("curve", "fast-curve", "expressive"):
                 if kind == "target":
                     result = probe.move_absolute_with_speed_curve_for_initial_test(
                         target_counts=value,

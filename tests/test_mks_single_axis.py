@@ -3,7 +3,10 @@ import unittest
 from lamp_core.mks_can_protocol import CanFrame, ChecksumMode
 from lamp_core.mks_single_axis import (
     GENTLE_SPEED_CURVE,
+    GEARED_SPEED_CURVE,
     MAX_INITIAL_DELTA_COUNTS,
+    MAX_GEARED_TEST_SPEED_RPM,
+    motor_counts_for_joint_degrees,
     MotionStage,
     MksSingleAxisProbe,
     alternating_cycle_deltas,
@@ -28,6 +31,12 @@ class FakeCanTransport:
 
 
 class MksSingleAxisProbeTests(unittest.TestCase):
+    def test_13_point_7_to_1_reduction_converts_a_90_degree_output_move(self):
+        self.assertEqual(56_115, motor_counts_for_joint_degrees(90, 13.7))
+        self.assertEqual(-56_115, motor_counts_for_joint_degrees(-90, 13.7))
+        with self.assertRaisesRegex(ValueError, "90"):
+            motor_counts_for_joint_degrees(90.1, 13.7)
+
     def test_ten_cycles_are_twenty_alternating_relative_segments(self):
         self.assertEqual((4096, -4096) * 10, alternating_cycle_deltas(4096, 10))
         with self.assertRaisesRegex(ValueError, "at least 1"):
@@ -116,6 +125,24 @@ class MksSingleAxisProbeTests(unittest.TestCase):
     def test_default_curve_stays_within_the_initial_speed_cap(self):
         self.assertEqual([3, 6, 10, 4], [stage.speed_rpm for stage in GENTLE_SPEED_CURVE])
         self.assertTrue(all(stage.speed_rpm <= 10 for stage in GENTLE_SPEED_CURVE))
+
+    def test_geared_curve_is_allowed_only_with_the_explicit_geared_speed_cap(self):
+        transport = FakeCanTransport((
+            reply(1, 0x31, 0, 6), reply(1, 0x32, 0, 2),
+            reply(1, 0x31, 4092, 6), reply(1, 0x32, 0, 2),
+        ))
+        probe = MksSingleAxisProbe(transport, 1, ChecksumMode.ADDITIVE)
+        immediate_stages = tuple(
+            MotionStage(stage.speed_rpm, stage.acceleration, 0) for stage in GEARED_SPEED_CURVE
+        )
+
+        result = probe.move_relative_with_speed_curve_for_initial_test(
+            stages=immediate_stages,
+            max_speed_rpm=MAX_GEARED_TEST_SPEED_RPM,
+        )
+
+        self.assertTrue(result.reached_target)
+        self.assertEqual([12, 30, 60, 18], [stage.speed_rpm for stage in GEARED_SPEED_CURVE])
 
     def test_probe_rejects_a_larger_than_quarter_revolution_step(self):
         probe = MksSingleAxisProbe(FakeCanTransport(()), 1, ChecksumMode.ADDITIVE)

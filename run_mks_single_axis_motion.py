@@ -19,12 +19,16 @@ from dataclasses import dataclass
 from lamp_core.mks_can_protocol import CanFrame, ChecksumMode, set_bus_enabled
 from lamp_core.mks_single_axis import (
     COUNTS_PER_REVOLUTION,
+    GEARED_SPEED_CURVE,
     MAX_INITIAL_DELTA_COUNTS,
+    MAX_INITIAL_OUTPUT_DEGREES,
     MAX_INITIAL_SPEED_RPM,
+    MAX_GEARED_TEST_SPEED_RPM,
     CanTransport,
     GENTLE_SPEED_CURVE,
     MksSingleAxisProbe,
     alternating_cycle_deltas,
+    motor_counts_for_joint_degrees,
 )
 
 
@@ -60,15 +64,26 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--node-id", type=int, default=1)
     result.add_argument("--checksum", choices=[mode.value for mode in ChecksumMode], default=ChecksumMode.ADDITIVE.value)
     result.add_argument("--delta-counts", type=int, default=MAX_INITIAL_DELTA_COUNTS,
-                        help="relative encoder step; initial test allows ±4096 (one quarter motor revolution)")
+                        help="relative motor-encoder step; raw diagnostic mode allows ±4096")
+    result.add_argument(
+        "--joint-degrees",
+        type=float,
+        help="requested output-joint displacement (±90°); converted through --gear-ratio and overrides --delta-counts",
+    )
     result.add_argument("--speed-rpm", type=int, default=MAX_INITIAL_SPEED_RPM)
     result.add_argument("--acceleration", type=int, default=1)
     result.add_argument("--timeout-s", type=float, default=15.0)
     result.add_argument(
+        "--gear-ratio",
+        type=float,
+        default=1.0,
+        help="motor revolutions per joint-output revolution; 13.7 enables the geared 60 RPM curve cap",
+    )
+    result.add_argument(
         "--profile",
         choices=("constant", "curve"),
         default="constant",
-        help="constant uses --speed-rpm/--acceleration; curve streams live F5 updates at 3→6→10→4 RPM",
+        help="constant uses --speed-rpm/--acceleration; curve streams live F5 speed updates",
     )
     result.add_argument(
         "--cycles",
@@ -83,23 +98,43 @@ def parser() -> argparse.ArgumentParser:
 def main() -> int:
     args = parser().parse_args()
     mode = ChecksumMode(args.checksum)
-    if not 1 <= abs(args.delta_counts) <= MAX_INITIAL_DELTA_COUNTS:
-        parser().error("--delta-counts must be within ±4096 for the initial physical test")
-    if not 1 <= args.speed_rpm <= MAX_INITIAL_SPEED_RPM:
-        parser().error("--speed-rpm must be within 1..10 for the initial physical test")
+    if args.gear_ratio < 1:
+        parser().error("--gear-ratio must be at least 1.0")
+    if args.joint_degrees is None:
+        if not 1 <= abs(args.delta_counts) <= MAX_INITIAL_DELTA_COUNTS:
+            parser().error("--delta-counts must be within ±4096 for raw motor-axis diagnostics")
+        delta_counts = args.delta_counts
+        max_delta_counts = MAX_INITIAL_DELTA_COUNTS
+    else:
+        try:
+            delta_counts = motor_counts_for_joint_degrees(args.joint_degrees, args.gear_ratio)
+        except ValueError as error:
+            parser().error(str(error))
+        max_delta_counts = abs(delta_counts)
     if args.cycles < 0:
         parser().error("--cycles must be zero (one-way test) or a positive number of forward/reverse cycles")
 
-    deltas = (args.delta_counts,) if args.cycles == 0 else alternating_cycle_deltas(args.delta_counts, args.cycles)
+    deltas = (delta_counts,) if args.cycles == 0 else alternating_cycle_deltas(delta_counts, args.cycles)
+    geared = args.gear_ratio > 1.0
+    max_speed_rpm = MAX_GEARED_TEST_SPEED_RPM if geared else MAX_INITIAL_SPEED_RPM
+    curve = GEARED_SPEED_CURVE if geared else GENTLE_SPEED_CURVE
+    if not 1 <= args.speed_rpm <= max_speed_rpm:
+        parser().error(f"--speed-rpm must be within 1..{max_speed_rpm} for this drive configuration")
 
     print("MKS single-axis initial motion: node", args.node_id)
-    print(f"bounded relative step: {args.delta_counts} counts ({args.delta_counts / COUNTS_PER_REVOLUTION * 360:.1f}° motor-axis equivalent)")
-    print(f"speed: {args.speed_rpm} RPM; acceleration: {args.acceleration}; checksum: {mode.value}")
+    print(f"bounded relative step: {delta_counts} motor counts ({delta_counts / COUNTS_PER_REVOLUTION * 360:.1f}° motor-axis equivalent)")
+    print(f"gear ratio: {args.gear_ratio:g}:1; output equivalent: {delta_counts / COUNTS_PER_REVOLUTION * 360 / args.gear_ratio:.2f}°")
+    if args.joint_degrees is not None:
+        print(f"requested output angle: {args.joint_degrees:g}° (limit ±{MAX_INITIAL_OUTPUT_DEGREES:g}°)")
     if args.profile == "curve":
         print(
             "live speed curve:",
-            " -> ".join(f"{stage.speed_rpm} RPM / acc {stage.acceleration}" for stage in GENTLE_SPEED_CURVE),
+            " -> ".join(f"{stage.speed_rpm} RPM / acc {stage.acceleration}" for stage in curve),
         )
+        print(f"peak joint-output speed: {max(stage.speed_rpm for stage in curve) / args.gear_ratio:.2f} RPM")
+    else:
+        print(f"speed: {args.speed_rpm} RPM; acceleration: {args.acceleration}")
+    print(f"checksum: {mode.value}")
     if args.cycles:
         print(f"repeatability run: {args.cycles} forward/reverse cycles ({len(deltas)} motion segments)")
     print("enable frame:", set_bus_enabled(args.node_id, True, mode))
@@ -116,7 +151,10 @@ def main() -> int:
             if args.profile == "curve":
                 result = probe.move_relative_with_speed_curve_for_initial_test(
                     delta_counts=delta_counts,
+                    stages=curve,
                     timeout_s=args.timeout_s,
+                    max_speed_rpm=max_speed_rpm,
+                    max_delta_counts=max_delta_counts,
                 )
             else:
                 result = probe.move_relative_for_initial_test(
@@ -124,6 +162,8 @@ def main() -> int:
                     speed_rpm=args.speed_rpm,
                     acceleration=args.acceleration,
                     timeout_s=args.timeout_s,
+                    max_speed_rpm=max_speed_rpm,
+                    max_delta_counts=max_delta_counts,
                 )
             print("before:", result.before)
             print("target encoder:", result.target_counts)

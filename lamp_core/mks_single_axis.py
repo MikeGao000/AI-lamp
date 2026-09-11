@@ -27,6 +27,8 @@ from lamp_core.mks_can_protocol import (
 COUNTS_PER_REVOLUTION = 16_384
 MAX_INITIAL_DELTA_COUNTS = 4_096
 MAX_INITIAL_SPEED_RPM = 10
+MAX_GEARED_TEST_SPEED_RPM = 60
+MAX_INITIAL_OUTPUT_DEGREES = 90.0
 # The MKS encoder and RPM reports are integral-valued.  A closed-loop axis can
 # legitimately settle a few counts either side of the requested coordinate and
 # report ±1 RPM while mechanically at rest.
@@ -53,6 +55,16 @@ GENTLE_SPEED_CURVE: tuple[MotionStage, ...] = (
     MotionStage(speed_rpm=4, acceleration=12, hold_s=0.0),
 )
 
+# Explicitly opt-in curve for a 13.7:1 output reduction.  The motor's 60 RPM
+# peak becomes about 4.38 RPM at the joint output, while retaining the same
+# 4096-count motor-side travel used by the first physical test.
+GEARED_SPEED_CURVE: tuple[MotionStage, ...] = (
+    MotionStage(speed_rpm=12, acceleration=16, hold_s=0.35),
+    MotionStage(speed_rpm=30, acceleration=40, hold_s=0.35),
+    MotionStage(speed_rpm=60, acceleration=72, hold_s=0.35),
+    MotionStage(speed_rpm=18, acceleration=20, hold_s=0.0),
+)
+
 
 def alternating_cycle_deltas(delta_counts: int, cycles: int) -> tuple[int, ...]:
     """Return forward/reverse segments for complete repeatability cycles.
@@ -64,6 +76,15 @@ def alternating_cycle_deltas(delta_counts: int, cycles: int) -> tuple[int, ...]:
     if cycles < 1:
         raise ValueError("cycles must be at least 1")
     return tuple(segment for _ in range(cycles) for segment in (delta_counts, -delta_counts))
+
+
+def motor_counts_for_joint_degrees(joint_degrees: float, gear_ratio: float) -> int:
+    """Convert an output-joint displacement to MKS motor encoder counts."""
+    if gear_ratio < 1:
+        raise ValueError("gear ratio must be at least 1")
+    if not 0 < abs(joint_degrees) <= MAX_INITIAL_OUTPUT_DEGREES:
+        raise ValueError(f"output angle must be within ±{MAX_INITIAL_OUTPUT_DEGREES:g} degrees")
+    return round(joint_degrees / 360 * COUNTS_PER_REVOLUTION * gear_ratio)
 
 
 class CanTransport(Protocol):
@@ -131,6 +152,8 @@ class MksSingleAxisProbe:
         speed_rpm: int = MAX_INITIAL_SPEED_RPM,
         acceleration: int = 1,
         timeout_s: float = 15.0,
+        max_speed_rpm: int = MAX_INITIAL_SPEED_RPM,
+        max_delta_counts: int = MAX_INITIAL_DELTA_COUNTS,
     ) -> MotionResult:
         """Move at most one quarter motor revolution from the live position.
 
@@ -142,6 +165,8 @@ class MksSingleAxisProbe:
             delta_counts=delta_counts,
             stages=(MotionStage(speed_rpm, acceleration, 0.0),),
             timeout_s=timeout_s,
+            max_speed_rpm=max_speed_rpm,
+            max_delta_counts=max_delta_counts,
         )
 
     def move_relative_with_speed_curve_for_initial_test(
@@ -150,12 +175,16 @@ class MksSingleAxisProbe:
         delta_counts: int = MAX_INITIAL_DELTA_COUNTS,
         stages: Sequence[MotionStage] = GENTLE_SPEED_CURVE,
         timeout_s: float = 15.0,
+        max_speed_rpm: int = MAX_INITIAL_SPEED_RPM,
+        max_delta_counts: int = MAX_INITIAL_DELTA_COUNTS,
     ) -> MotionResult:
         """Move one bounded increment while updating MKS F5 speed in flight."""
         return self._move_relative_with_stages(
             delta_counts=delta_counts,
             stages=stages,
             timeout_s=timeout_s,
+            max_speed_rpm=max_speed_rpm,
+            max_delta_counts=max_delta_counts,
         )
 
     def _move_relative_with_stages(
@@ -164,14 +193,20 @@ class MksSingleAxisProbe:
         delta_counts: int,
         stages: Sequence[MotionStage],
         timeout_s: float,
+        max_speed_rpm: int,
+        max_delta_counts: int,
     ) -> MotionResult:
-        if not 1 <= abs(delta_counts) <= MAX_INITIAL_DELTA_COUNTS:
-            raise ValueError(f"initial delta must be within ±{MAX_INITIAL_DELTA_COUNTS} encoder counts")
+        if not 1 <= max_delta_counts <= 2**23 - 1:
+            raise ValueError("maximum delta must fit the MKS signed-int24 coordinate range")
+        if not 1 <= abs(delta_counts) <= max_delta_counts:
+            raise ValueError(f"initial delta must be within ±{max_delta_counts} encoder counts")
         if not stages:
             raise ValueError("at least one motion stage is required")
+        if not 1 <= max_speed_rpm <= MAX_GEARED_TEST_SPEED_RPM:
+            raise ValueError(f"maximum stage speed must be within 1..{MAX_GEARED_TEST_SPEED_RPM} RPM")
         for stage in stages:
-            if not 1 <= stage.speed_rpm <= MAX_INITIAL_SPEED_RPM:
-                raise ValueError(f"stage speed must be within 1..{MAX_INITIAL_SPEED_RPM} RPM")
+            if not 1 <= stage.speed_rpm <= max_speed_rpm:
+                raise ValueError(f"stage speed must be within 1..{max_speed_rpm} RPM")
             if not 0 <= stage.acceleration <= 255:
                 raise ValueError("stage acceleration must be in 0..255")
             if stage.hold_s < 0:

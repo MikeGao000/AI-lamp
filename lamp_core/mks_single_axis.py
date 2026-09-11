@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from time import monotonic, sleep
-from typing import Protocol
+from typing import Protocol, Sequence
 
 from lamp_core.mks_can_protocol import (
     CanFrame,
@@ -32,6 +32,26 @@ MAX_INITIAL_SPEED_RPM = 10
 # report ±1 RPM while mechanically at rest.
 POSITION_SETTLE_TOLERANCE_COUNTS = 8
 RPM_SETTLE_TOLERANCE = 1
+
+
+@dataclass(frozen=True)
+class MotionStage:
+    """One live F5 speed/acceleration update for a common final target."""
+
+    speed_rpm: int
+    acceleration: int
+    hold_s: float
+
+
+# MKS F5 accepts real-time speed updates while a prior F5 is still moving.
+# This stays inside the first physical-test speed cap and eases off before the
+# final target; it writes no persistent motor setting.
+GENTLE_SPEED_CURVE: tuple[MotionStage, ...] = (
+    MotionStage(speed_rpm=3, acceleration=8, hold_s=0.35),
+    MotionStage(speed_rpm=6, acceleration=24, hold_s=0.35),
+    MotionStage(speed_rpm=10, acceleration=40, hold_s=0.35),
+    MotionStage(speed_rpm=4, acceleration=12, hold_s=0.0),
+)
 
 
 def alternating_cycle_deltas(delta_counts: int, cycles: int) -> tuple[int, ...]:
@@ -118,12 +138,44 @@ class MksSingleAxisProbe:
         control for the move and does not disable it afterwards, avoiding an
         unexpected loss of holding torque on an installed axis.
         """
+        return self._move_relative_with_stages(
+            delta_counts=delta_counts,
+            stages=(MotionStage(speed_rpm, acceleration, 0.0),),
+            timeout_s=timeout_s,
+        )
+
+    def move_relative_with_speed_curve_for_initial_test(
+        self,
+        *,
+        delta_counts: int = MAX_INITIAL_DELTA_COUNTS,
+        stages: Sequence[MotionStage] = GENTLE_SPEED_CURVE,
+        timeout_s: float = 15.0,
+    ) -> MotionResult:
+        """Move one bounded increment while updating MKS F5 speed in flight."""
+        return self._move_relative_with_stages(
+            delta_counts=delta_counts,
+            stages=stages,
+            timeout_s=timeout_s,
+        )
+
+    def _move_relative_with_stages(
+        self,
+        *,
+        delta_counts: int,
+        stages: Sequence[MotionStage],
+        timeout_s: float,
+    ) -> MotionResult:
         if not 1 <= abs(delta_counts) <= MAX_INITIAL_DELTA_COUNTS:
             raise ValueError(f"initial delta must be within ±{MAX_INITIAL_DELTA_COUNTS} encoder counts")
-        if not 1 <= speed_rpm <= MAX_INITIAL_SPEED_RPM:
-            raise ValueError(f"initial speed must be within 1..{MAX_INITIAL_SPEED_RPM} RPM")
-        if not 0 <= acceleration <= 255:
-            raise ValueError("acceleration must be in 0..255")
+        if not stages:
+            raise ValueError("at least one motion stage is required")
+        for stage in stages:
+            if not 1 <= stage.speed_rpm <= MAX_INITIAL_SPEED_RPM:
+                raise ValueError(f"stage speed must be within 1..{MAX_INITIAL_SPEED_RPM} RPM")
+            if not 0 <= stage.acceleration <= 255:
+                raise ValueError("stage acceleration must be in 0..255")
+            if stage.hold_s < 0:
+                raise ValueError("stage hold time cannot be negative")
 
         before = self.snapshot()
         if abs(before.rpm) > RPM_SETTLE_TOLERANCE:
@@ -136,15 +188,18 @@ class MksSingleAxisProbe:
             raise ValueError("target coordinate exceeds MKS absolute-coordinate range")
 
         self._transport.send(set_bus_enabled(self._node_id, True, self._checksum_mode))
-        self._transport.send(
-            absolute_coordinate_move(
-                self._node_id,
-                speed_rpm=speed_rpm,
-                acceleration=acceleration,
-                coordinate=target,
-                mode=self._checksum_mode,
+        for stage in stages:
+            self._transport.send(
+                absolute_coordinate_move(
+                    self._node_id,
+                    speed_rpm=stage.speed_rpm,
+                    acceleration=stage.acceleration,
+                    coordinate=target,
+                    mode=self._checksum_mode,
+                )
             )
-        )
+            if stage.hold_s:
+                sleep(stage.hold_s)
 
         deadline = monotonic() + timeout_s
         after = before

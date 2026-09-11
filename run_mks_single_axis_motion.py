@@ -22,6 +22,7 @@ from lamp_core.mks_single_axis import (
     MAX_INITIAL_DELTA_COUNTS,
     MAX_INITIAL_SPEED_RPM,
     CanTransport,
+    GENTLE_SPEED_CURVE,
     MksSingleAxisProbe,
     alternating_cycle_deltas,
 )
@@ -64,6 +65,12 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--acceleration", type=int, default=1)
     result.add_argument("--timeout-s", type=float, default=15.0)
     result.add_argument(
+        "--profile",
+        choices=("constant", "curve"),
+        default="constant",
+        help="constant uses --speed-rpm/--acceleration; curve streams live F5 updates at 3→6→10→4 RPM",
+    )
+    result.add_argument(
         "--cycles",
         type=int,
         default=0,
@@ -88,6 +95,11 @@ def main() -> int:
     print("MKS single-axis initial motion: node", args.node_id)
     print(f"bounded relative step: {args.delta_counts} counts ({args.delta_counts / COUNTS_PER_REVOLUTION * 360:.1f}° motor-axis equivalent)")
     print(f"speed: {args.speed_rpm} RPM; acceleration: {args.acceleration}; checksum: {mode.value}")
+    if args.profile == "curve":
+        print(
+            "live speed curve:",
+            " -> ".join(f"{stage.speed_rpm} RPM / acc {stage.acceleration}" for stage in GENTLE_SPEED_CURVE),
+        )
     if args.cycles:
         print(f"repeatability run: {args.cycles} forward/reverse cycles ({len(deltas)} motion segments)")
     print("enable frame:", set_bus_enabled(args.node_id, True, mode))
@@ -101,12 +113,18 @@ def main() -> int:
         probe = MksSingleAxisProbe(transport, args.node_id, mode)
         for segment_index, delta_counts in enumerate(deltas, start=1):
             print(f"segment {segment_index}/{len(deltas)}: {delta_counts:+d} counts")
-            result = probe.move_relative_for_initial_test(
-                delta_counts=delta_counts,
-                speed_rpm=args.speed_rpm,
-                acceleration=args.acceleration,
-                timeout_s=args.timeout_s,
-            )
+            if args.profile == "curve":
+                result = probe.move_relative_with_speed_curve_for_initial_test(
+                    delta_counts=delta_counts,
+                    timeout_s=args.timeout_s,
+                )
+            else:
+                result = probe.move_relative_for_initial_test(
+                    delta_counts=delta_counts,
+                    speed_rpm=args.speed_rpm,
+                    acceleration=args.acceleration,
+                    timeout_s=args.timeout_s,
+                )
             print("before:", result.before)
             print("target encoder:", result.target_counts)
             print("after:", result.after)

@@ -2,7 +2,9 @@ import unittest
 
 from lamp_core.mks_can_protocol import CanFrame, ChecksumMode
 from lamp_core.mks_single_axis import (
+    GENTLE_SPEED_CURVE,
     MAX_INITIAL_DELTA_COUNTS,
+    MotionStage,
     MksSingleAxisProbe,
     alternating_cycle_deltas,
 )
@@ -87,6 +89,33 @@ class MksSingleAxisProbeTests(unittest.TestCase):
         self.assertTrue(first.reached_target)
         self.assertTrue(second.reached_target)
         self.assertEqual(-4, second.after.encoder_counts)
+
+    def test_curve_streams_live_f5_speed_updates_to_one_target(self):
+        transport = FakeCanTransport((
+            reply(1, 0x31, 100, 6), reply(1, 0x32, 0, 2),
+            reply(1, 0x31, 4194, 6), reply(1, 0x32, 0, 2),
+        ))
+        probe = MksSingleAxisProbe(transport, 1, ChecksumMode.ADDITIVE)
+        stages = (
+            MotionStage(speed_rpm=3, acceleration=8, hold_s=0),
+            MotionStage(speed_rpm=6, acceleration=24, hold_s=0),
+            MotionStage(speed_rpm=10, acceleration=40, hold_s=0),
+            MotionStage(speed_rpm=4, acceleration=12, hold_s=0),
+        )
+
+        result = probe.move_relative_with_speed_curve_for_initial_test(
+            delta_counts=4096,
+            stages=stages,
+        )
+
+        self.assertTrue(result.reached_target)
+        f5_frames = [frame for frame in transport.sent if frame.data[0] == 0xF5]
+        self.assertEqual([3, 6, 10, 4], [int.from_bytes(frame.data[1:3], "big") for frame in f5_frames])
+        self.assertEqual([4196] * 4, [int.from_bytes(frame.data[4:7], "big", signed=True) for frame in f5_frames])
+
+    def test_default_curve_stays_within_the_initial_speed_cap(self):
+        self.assertEqual([3, 6, 10, 4], [stage.speed_rpm for stage in GENTLE_SPEED_CURVE])
+        self.assertTrue(all(stage.speed_rpm <= 10 for stage in GENTLE_SPEED_CURVE))
 
     def test_probe_rejects_a_larger_than_quarter_revolution_step(self):
         probe = MksSingleAxisProbe(FakeCanTransport(()), 1, ChecksumMode.ADDITIVE)

@@ -27,6 +27,11 @@ from lamp_core.mks_can_protocol import (
 COUNTS_PER_REVOLUTION = 16_384
 MAX_INITIAL_DELTA_COUNTS = 4_096
 MAX_INITIAL_SPEED_RPM = 10
+# The MKS encoder and RPM reports are integral-valued.  A closed-loop axis can
+# legitimately settle a few counts either side of the requested coordinate and
+# report ±1 RPM while mechanically at rest.
+POSITION_SETTLE_TOLERANCE_COUNTS = 8
+RPM_SETTLE_TOLERANCE = 1
 
 
 class CanTransport(Protocol):
@@ -49,6 +54,10 @@ class MotionResult:
     target_counts: int
     after: MotorSnapshot
     reached_target: bool
+
+    @property
+    def position_error_counts(self) -> int:
+        return self.after.encoder_counts - self.target_counts
 
 
 class MksSingleAxisProbe:
@@ -130,6 +139,9 @@ class MksSingleAxisProbe:
         while monotonic() < deadline:
             sleep(0.10)
             after = self.snapshot()
-            if after.encoder_counts == target and after.rpm == 0:
+            if (
+                abs(after.encoder_counts - target) <= POSITION_SETTLE_TOLERANCE_COUNTS
+                and abs(after.rpm) <= RPM_SETTLE_TOLERANCE
+            ):
                 return MotionResult(before, target, after, reached_target=True)
         return MotionResult(before, target, after, reached_target=False)

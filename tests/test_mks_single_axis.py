@@ -52,6 +52,18 @@ class MksSingleAxisProbeTests(unittest.TestCase):
         self.assertEqual(0xF5, transport.sent[3].data[0])
         self.assertEqual(4196, int.from_bytes(transport.sent[3].data[4:7], "big", signed=True))
 
+    def test_probe_accepts_the_documented_encoder_and_rpm_settle_tolerance(self):
+        # A real MKS test settled four counts short and reported -1 RPM.
+        transport = FakeCanTransport((
+            reply(1, 0x31, 0, 6), reply(1, 0x32, 0, 2),
+            reply(1, 0x31, 4092, 6), reply(1, 0x32, -1, 2),
+        ))
+        probe = MksSingleAxisProbe(transport, 1, ChecksumMode.ADDITIVE)
+        result = probe.move_relative_for_initial_test()
+
+        self.assertTrue(result.reached_target)
+        self.assertEqual(-4, result.position_error_counts)
+
     def test_probe_rejects_a_larger_than_quarter_revolution_step(self):
         probe = MksSingleAxisProbe(FakeCanTransport(()), 1, ChecksumMode.ADDITIVE)
         with self.assertRaisesRegex(ValueError, "4096"):

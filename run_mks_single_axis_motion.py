@@ -97,10 +97,11 @@ def main() -> int:
     print("before:", result.before)
     print("target encoder:", result.target_counts)
     print("after:", result.after)
+    print("position error:", result.position_error_counts, "counts")
     if not result.reached_target:
         print("FAIL: target was not reached before timeout.")
         return 2
-    print("PASS: encoder reached the commanded one-quarter-revolution-or-less target.")
+    print("PASS: encoder settled within the MKS feedback tolerance of the commanded target.")
     return 0
 
 

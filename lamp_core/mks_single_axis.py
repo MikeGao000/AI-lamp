@@ -126,7 +126,7 @@ class MksSingleAxisProbe:
             raise ValueError("acceleration must be in 0..255")
 
         before = self.snapshot()
-        if before.rpm != 0:
+        if abs(before.rpm) > RPM_SETTLE_TOLERANCE:
             raise RuntimeError(
                 f"node {self._node_id} is already moving at {before.rpm} RPM; "
                 "stop it and confirm a stationary encoder before this initial probe"

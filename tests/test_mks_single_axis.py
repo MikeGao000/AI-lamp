@@ -70,6 +70,24 @@ class MksSingleAxisProbeTests(unittest.TestCase):
         self.assertTrue(result.reached_target)
         self.assertEqual(-4, result.position_error_counts)
 
+    def test_next_segment_accepts_a_previous_settle_reading_of_minus_one_rpm(self):
+        transport = FakeCanTransport((
+            # First +4096 step, which settles at 4092 / -1 RPM.
+            reply(1, 0x31, 0, 6), reply(1, 0x32, 0, 2),
+            reply(1, 0x31, 4092, 6), reply(1, 0x32, -1, 2),
+            # Its reverse step must accept that -1 RPM snapshot as stationary.
+            reply(1, 0x31, 4092, 6), reply(1, 0x32, -1, 2),
+            reply(1, 0x31, -4, 6), reply(1, 0x32, 0, 2),
+        ))
+        probe = MksSingleAxisProbe(transport, 1, ChecksumMode.ADDITIVE)
+
+        first = probe.move_relative_for_initial_test(delta_counts=4096)
+        second = probe.move_relative_for_initial_test(delta_counts=-4096)
+
+        self.assertTrue(first.reached_target)
+        self.assertTrue(second.reached_target)
+        self.assertEqual(-4, second.after.encoder_counts)
+
     def test_probe_rejects_a_larger_than_quarter_revolution_step(self):
         probe = MksSingleAxisProbe(FakeCanTransport(()), 1, ChecksumMode.ADDITIVE)
         with self.assertRaisesRegex(ValueError, "4096"):

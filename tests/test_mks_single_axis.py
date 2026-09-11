@@ -4,6 +4,7 @@ from lamp_core.mks_can_protocol import CanFrame, ChecksumMode
 from lamp_core.mks_single_axis import (
     MAX_INITIAL_DELTA_COUNTS,
     MksSingleAxisProbe,
+    alternating_cycle_deltas,
 )
 
 
@@ -25,6 +26,11 @@ class FakeCanTransport:
 
 
 class MksSingleAxisProbeTests(unittest.TestCase):
+    def test_ten_cycles_are_twenty_alternating_relative_segments(self):
+        self.assertEqual((4096, -4096) * 10, alternating_cycle_deltas(4096, 10))
+        with self.assertRaisesRegex(ValueError, "at least 1"):
+            alternating_cycle_deltas(4096, 0)
+
     def test_probe_refuses_to_join_a_motor_already_in_motion(self):
         transport = FakeCanTransport((
             reply(1, 0x31, 100, 6), reply(1, 0x32, 3, 2),

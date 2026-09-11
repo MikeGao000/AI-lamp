@@ -34,6 +34,18 @@ POSITION_SETTLE_TOLERANCE_COUNTS = 8
 RPM_SETTLE_TOLERANCE = 1
 
 
+def alternating_cycle_deltas(delta_counts: int, cycles: int) -> tuple[int, ...]:
+    """Return forward/reverse segments for complete repeatability cycles.
+
+    One cycle is two relative moves, so the axis returns to its starting
+    encoder neighbourhood after each cycle even when its absolute zero has
+    not yet been calibrated.
+    """
+    if cycles < 1:
+        raise ValueError("cycles must be at least 1")
+    return tuple(segment for _ in range(cycles) for segment in (delta_counts, -delta_counts))
+
+
 class CanTransport(Protocol):
     """The narrow transport contract used by the single-axis probe."""
 

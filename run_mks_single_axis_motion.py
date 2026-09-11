@@ -23,6 +23,7 @@ from lamp_core.mks_single_axis import (
     MAX_INITIAL_SPEED_RPM,
     CanTransport,
     MksSingleAxisProbe,
+    alternating_cycle_deltas,
 )
 
 
@@ -62,7 +63,13 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--speed-rpm", type=int, default=MAX_INITIAL_SPEED_RPM)
     result.add_argument("--acceleration", type=int, default=1)
     result.add_argument("--timeout-s", type=float, default=15.0)
-    result.add_argument("--execute", action="store_true", help="open SocketCAN and send the two physical commands")
+    result.add_argument(
+        "--cycles",
+        type=int,
+        default=0,
+        help="complete forward/reverse cycles; 10 means 20 motion segments and returns near the starting position",
+    )
+    result.add_argument("--execute", action="store_true", help="open SocketCAN and send physical commands")
     return result
 
 
@@ -73,10 +80,16 @@ def main() -> int:
         parser().error("--delta-counts must be within ±4096 for the initial physical test")
     if not 1 <= args.speed_rpm <= MAX_INITIAL_SPEED_RPM:
         parser().error("--speed-rpm must be within 1..10 for the initial physical test")
+    if args.cycles < 0:
+        parser().error("--cycles must be zero (one-way test) or a positive number of forward/reverse cycles")
+
+    deltas = (args.delta_counts,) if args.cycles == 0 else alternating_cycle_deltas(args.delta_counts, args.cycles)
 
     print("MKS single-axis initial motion: node", args.node_id)
     print(f"bounded relative step: {args.delta_counts} counts ({args.delta_counts / COUNTS_PER_REVOLUTION * 360:.1f}° motor-axis equivalent)")
     print(f"speed: {args.speed_rpm} RPM; acceleration: {args.acceleration}; checksum: {mode.value}")
+    if args.cycles:
+        print(f"repeatability run: {args.cycles} forward/reverse cycles ({len(deltas)} motion segments)")
     print("enable frame:", set_bus_enabled(args.node_id, True, mode))
     print("motion frame is calculated from the encoder position read immediately before execution.")
     if not args.execute:
@@ -86,22 +99,24 @@ def main() -> int:
     transport = SocketCanTransport(args.interface)
     try:
         probe = MksSingleAxisProbe(transport, args.node_id, mode)
-        result = probe.move_relative_for_initial_test(
-            delta_counts=args.delta_counts,
-            speed_rpm=args.speed_rpm,
-            acceleration=args.acceleration,
-            timeout_s=args.timeout_s,
-        )
+        for segment_index, delta_counts in enumerate(deltas, start=1):
+            print(f"segment {segment_index}/{len(deltas)}: {delta_counts:+d} counts")
+            result = probe.move_relative_for_initial_test(
+                delta_counts=delta_counts,
+                speed_rpm=args.speed_rpm,
+                acceleration=args.acceleration,
+                timeout_s=args.timeout_s,
+            )
+            print("before:", result.before)
+            print("target encoder:", result.target_counts)
+            print("after:", result.after)
+            print("position error:", result.position_error_counts, "counts")
+            if not result.reached_target:
+                print(f"FAIL: segment {segment_index} did not reach its target before timeout.")
+                return 2
     finally:
         transport.close()
-    print("before:", result.before)
-    print("target encoder:", result.target_counts)
-    print("after:", result.after)
-    print("position error:", result.position_error_counts, "counts")
-    if not result.reached_target:
-        print("FAIL: target was not reached before timeout.")
-        return 2
-    print("PASS: encoder settled within the MKS feedback tolerance of the commanded target.")
+    print(f"PASS: {len(deltas)} segment(s) settled within the MKS feedback tolerance.")
     return 0
 
 

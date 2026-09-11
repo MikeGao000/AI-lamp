@@ -1,0 +1,62 @@
+import unittest
+
+from lamp_core.mks_can_protocol import CanFrame, ChecksumMode
+from lamp_core.mks_single_axis import (
+    MAX_INITIAL_DELTA_COUNTS,
+    MksSingleAxisProbe,
+)
+
+
+def reply(node_id: int, command: int, value: int, width: int) -> CanFrame:
+    body = bytes((command,)) + value.to_bytes(width, "big", signed=True)
+    return CanFrame(node_id, body + bytes(((node_id + sum(body)) & 0xFF,)))
+
+
+class FakeCanTransport:
+    def __init__(self, responses):
+        self.responses = list(responses)
+        self.sent = []
+
+    def send(self, frame):
+        self.sent.append(frame)
+
+    def receive(self, timeout_s):
+        return self.responses.pop(0) if self.responses else None
+
+
+class MksSingleAxisProbeTests(unittest.TestCase):
+    def test_probe_refuses_to_join_a_motor_already_in_motion(self):
+        transport = FakeCanTransport((
+            reply(1, 0x31, 100, 6), reply(1, 0x32, 3, 2),
+        ))
+        probe = MksSingleAxisProbe(transport, node_id=1, checksum_mode="additive")
+
+        with self.assertRaisesRegex(RuntimeError, "already moving at 3 RPM"):
+            probe.move_relative_for_initial_test()
+
+        self.assertEqual([frame.data[0] for frame in transport.sent], [0x31, 0x32])
+
+    def test_relative_probe_reads_live_position_and_sends_bounded_absolute_target(self):
+        # before snapshot: encoder 100 / rpm 0; after snapshot: target 4196 / rpm 0
+        transport = FakeCanTransport((
+            reply(1, 0x31, 100, 6), reply(1, 0x32, 0, 2),
+            reply(1, 0x31, 4196, 6), reply(1, 0x32, 0, 2),
+        ))
+        probe = MksSingleAxisProbe(transport, 1, ChecksumMode.ADDITIVE)
+        result = probe.move_relative_for_initial_test(delta_counts=4096, speed_rpm=10, acceleration=1)
+
+        self.assertTrue(result.reached_target)
+        self.assertEqual(100, result.before.encoder_counts)
+        self.assertEqual(4196, result.target_counts)
+        self.assertEqual(0xF3, transport.sent[2].data[0])
+        self.assertEqual(0xF5, transport.sent[3].data[0])
+        self.assertEqual(4196, int.from_bytes(transport.sent[3].data[4:7], "big", signed=True))
+
+    def test_probe_rejects_a_larger_than_quarter_revolution_step(self):
+        probe = MksSingleAxisProbe(FakeCanTransport(()), 1, ChecksumMode.ADDITIVE)
+        with self.assertRaisesRegex(ValueError, "4096"):
+            probe.move_relative_for_initial_test(delta_counts=MAX_INITIAL_DELTA_COUNTS + 1)
+
+
+if __name__ == "__main__":
+    unittest.main()

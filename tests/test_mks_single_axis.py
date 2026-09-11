@@ -4,6 +4,7 @@ from lamp_core.mks_can_protocol import CanFrame, ChecksumMode
 from lamp_core.mks_single_axis import (
     GENTLE_SPEED_CURVE,
     GEARED_SPEED_CURVE,
+    FAST_GEARED_SPEED_CURVE,
     MAX_INITIAL_DELTA_COUNTS,
     MAX_GEARED_TEST_SPEED_RPM,
     motor_counts_for_joint_degrees,
@@ -143,6 +144,10 @@ class MksSingleAxisProbeTests(unittest.TestCase):
 
         self.assertTrue(result.reached_target)
         self.assertEqual([12, 30, 60, 18], [stage.speed_rpm for stage in GEARED_SPEED_CURVE])
+
+    def test_fast_geared_curve_reaches_120_rpm_within_its_explicit_cap(self):
+        self.assertEqual([30, 80, 120, 30], [stage.speed_rpm for stage in FAST_GEARED_SPEED_CURVE])
+        self.assertEqual(MAX_GEARED_TEST_SPEED_RPM, max(stage.speed_rpm for stage in FAST_GEARED_SPEED_CURVE))
 
     def test_probe_rejects_a_larger_than_quarter_revolution_step(self):
         probe = MksSingleAxisProbe(FakeCanTransport(()), 1, ChecksumMode.ADDITIVE)

@@ -27,7 +27,7 @@ from lamp_core.mks_can_protocol import (
 COUNTS_PER_REVOLUTION = 16_384
 MAX_INITIAL_DELTA_COUNTS = 4_096
 MAX_INITIAL_SPEED_RPM = 10
-MAX_GEARED_TEST_SPEED_RPM = 60
+MAX_GEARED_TEST_SPEED_RPM = 120
 MAX_INITIAL_OUTPUT_DEGREES = 90.0
 # The MKS encoder and RPM reports are integral-valued.  A closed-loop axis can
 # legitimately settle a few counts either side of the requested coordinate and
@@ -63,6 +63,15 @@ GEARED_SPEED_CURVE: tuple[MotionStage, ...] = (
     MotionStage(speed_rpm=30, acceleration=40, hold_s=0.35),
     MotionStage(speed_rpm=60, acceleration=72, hold_s=0.35),
     MotionStage(speed_rpm=18, acceleration=20, hold_s=0.0),
+)
+
+# Faster, still bounded geared profile for a visibly lively 90-degree output
+# motion.  Its 120 RPM motor peak is about 8.76 RPM after a 13.7:1 reducer.
+FAST_GEARED_SPEED_CURVE: tuple[MotionStage, ...] = (
+    MotionStage(speed_rpm=30, acceleration=48, hold_s=0.35),
+    MotionStage(speed_rpm=80, acceleration=112, hold_s=0.35),
+    MotionStage(speed_rpm=120, acceleration=160, hold_s=0.35),
+    MotionStage(speed_rpm=30, acceleration=48, hold_s=0.0),
 )
 
 

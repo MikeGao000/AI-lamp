@@ -1,4 +1,6 @@
 import unittest
+from io import BytesIO
+from urllib.error import HTTPError
 from unittest.mock import patch
 
 from lamp_core.cloud import CloudVisionError, OpenAIResponsesVisionClient, StaticStoryClient
@@ -30,4 +32,12 @@ class CloudTests(unittest.TestCase):
         client = OpenAIResponsesVisionClient("test-key", "test-model", timeout_s=30)
         with patch("lamp_core.cloud.urlopen", side_effect=TimeoutError):
             with self.assertRaisesRegex(CloudVisionError, "timed out after 30s; retry the page"):
+                client.describe_page(b"jpeg")
+
+    def test_includes_safe_cloud_error_message(self):
+        response = BytesIO(b'{"error":{"message":"Unsupported parameter: example"}}')
+        error = HTTPError("https://api.openai.com/v1/responses", 400, "Bad Request", {}, response)
+        client = OpenAIResponsesVisionClient("test-key", "test-model")
+        with patch("lamp_core.cloud.urlopen", side_effect=error):
+            with self.assertRaisesRegex(CloudVisionError, "Unsupported parameter: example"):
                 client.describe_page(b"jpeg")

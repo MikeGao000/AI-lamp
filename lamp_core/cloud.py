@@ -111,7 +111,16 @@ class OpenAIResponsesVisionClient:
                     return self._read_stream(response, on_output_text_delta)
                 body = json.loads(response.read().decode("utf-8"))
         except HTTPError as error:
-            raise CloudVisionError(f"cloud API returned HTTP {error.code}") from error
+            detail = ""
+            try:
+                raw_detail = error.read().decode("utf-8", errors="replace")
+                parsed_detail = json.loads(raw_detail)
+                detail = str(parsed_detail.get("error", {}).get("message", ""))
+            except (AttributeError, json.JSONDecodeError, OSError):
+                detail = ""
+            safe_detail = " ".join(detail.split())[:240]
+            suffix = f": {safe_detail}" if safe_detail else ""
+            raise CloudVisionError(f"cloud API returned HTTP {error.code}{suffix}") from error
         except TimeoutError as error:
             # A response can time out after the request was accepted upstream.  Do
             # not retry here: that could create two billable model requests.  The

@@ -190,6 +190,31 @@ cp .env.example .env
 python3 app_main.py --mode pi
 ```
 
+实时预览摄像头时，在树莓派项目目录运行：
+
+```bash
+python3 camera_preview.py
+```
+
+在电脑 PowerShell 另开一个窗口，建立仅本机可见的加密转发：
+
+```powershell
+ssh -L 8765:127.0.0.1:8000 lamp@10.220.220.87
+```
+
+然后在电脑浏览器打开 `http://127.0.0.1:8765`。两个终端窗口需要保持运行，按 `Ctrl+C` 停止。预览程序与 `app_main.py` 不能同时占用摄像头；画面颠倒时使用 `python3 camera_preview.py --rotation 180`。如明确需要让同一局域网的其他设备观看，可在 Pi 上使用 `--host 0.0.0.0`，但这会向局域网暴露实时画面。
+
+预览画面会标出摄像头中心、检测到的页面/矩形目标中心、横向误差以及建议的 J1 方向。摄像头尚未装到 J1 时，可使用受限绝对位置映射测试实时跟随：图片从左移到右，电机在启动编码器两侧的固定角度范围内跟随，不会把持续误差累加为无限旋转。真实执行必须显式提供已经实测的齿比、正方向和速度，例如：
+
+```bash
+python3 camera_preview.py --execute-j1 \
+  --j1-gear-ratio <已实测齿比> \
+  --j1-positive-camera-direction <left或right> \
+  --j1-speed-rpm <已实测安全速度>
+```
+
+实时跟随不会简单降低最高速度：大幅目标移动使用较高响应，小幅视觉抖动使用较强过滤；下发位置经过连续的限跃度 S 曲线，速度随当前轨迹阶段变化。丢失目标时使用正弦扫描，在左右端点自然减速后反向。程序不会配置 `can0` 波特率，也不会猜测这些机械参数；CAN 必须先按已验证的电机配置启动。正式 Pi 阅读模式使用低分辨率视频流做运动检测，只在页面稳定并准备识读时抓取 `1600×1200` 高清 JPEG。
+
 云端接口遵循 [OpenAI Responses API](https://developers.openai.com/api/reference/cli/resources/responses/methods/create)，以 JPEG data URL 发送稳定页面，并设置 `store: false`。该客户端在未启用云端或未配置密钥时不会发出网络请求。
 
 主程序默认启用 Pi 本地绘本记忆，保存在 `data/picture-book-library/`：`pages/` 保存首次接受的页面照片、结构化识别结果、朗读文本及少量近似视角样本，`audio/` 保存由当前模型、音色和提示词生成的 WAV。再次看到相同页面时，程序用感知指纹容忍小幅光线/角度变化，直接复述缓存内容并播放缓存语音，不再调用页面视觉模型或 TTS；孩子提出的新问题仍走独立问答模型。缓存不会提交到 Git。

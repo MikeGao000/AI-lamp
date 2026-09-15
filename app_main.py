@@ -207,6 +207,9 @@ def run_pi(config: AppConfig) -> None:
                         bound_page_fingerprint = None
                     waiting_for_page_change = False
             if not waiting_for_page_change and gate.observe(motion):
+                jpeg = source.capture_high_resolution_jpeg()
+                with frame_lock:
+                    latest_jpeg = jpeg
                 provisional_page_id = page_id_for_jpeg(jpeg)
                 try:
                     provisional_fingerprint = fingerprint_jpeg(jpeg)

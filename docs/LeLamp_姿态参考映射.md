@@ -1,6 +1,14 @@
-# LeLamp 姿态参考映射
+# 外部姿态参考映射
 
 更新日期：2026-09-08
+
+## 采用顺序
+
+1. **Watti** 是当前的首要参照：它与本项目同为 `base → shoulder → elbow → neck → head` 五轴桌面灯。我们采用它的“每轴姿态关键帧 + 转场时间 + 虚拟预览”的场景组织方式；本项目的 MuJoCo 五轴模型、`POSE_LIBRARY` 与 minimum-jerk 转场就是该方式的本地实现。Watti 目前尚未发布源代码或示例动作文件，所以没有可下载的数值角度库。
+2. **LeLamp** 是表达动作和手动示教/回放流程的参照，但其第 4、5 轴与本项目不等价。
+3. **通用六轴机械臂与 LeRobot** 提供标定、示教、数据集和模仿训练流程；不导入它们的绝对关节角或连杆比例。
+
+## LeLamp 的转译
 
 LeLamp 可以作为本项目的表达动作参考，但不能把它的关节角直接抄到五轴步进台灯上。
 
@@ -16,4 +24,8 @@ LeLamp 的轴序为 `base_yaw, base_pitch, elbow_pitch, wrist_roll, wrist_pitch`
 
 数值姿态不从 LeLamp 直接复制：其公开运行时将姿态录为每台设备本地校准后的 CSV，再回放，零位、舵机方向和连杆安装角均属于具体实体设备。当前本地弧度值是对 Watti 风格几何和 MuJoCo 静态安装角的重新定向结果，保存在 `lamp_core/pose_library.py`，并由全有向转场训练与 MuJoCo 回放验证。
 
-参考：<https://github.com/humancomputerlab/LeLamp/blob/master/docs/2.%20Servos%20Setup.md>、<https://github.com/humancomputerlab/lelamp_runtime>。
+参考：
+
+- Watti：<https://github.com/Nikolay-Tyulkin/Watti/blob/main/docs/ARCHITECTURE.md>、<https://github.com/Nikolay-Tyulkin/Watti/blob/main/docs/HARDWARE.md>
+- LeLamp：<https://github.com/humancomputerlab/LeLamp/blob/master/docs/2.%20Servos%20Setup.md>、<https://github.com/humancomputerlab/lelamp_runtime>
+- LeRobot：<https://github.com/huggingface/lerobot/blob/main/docs/source/il_robots.mdx>

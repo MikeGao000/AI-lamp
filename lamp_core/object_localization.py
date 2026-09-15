@@ -61,7 +61,7 @@ class SimulatedLocalTargetDetector:
 
 def localization_instructions() -> str:
     return """You locate a user-requested physical target in one image.
-Return only one JSON object. Never include Markdown or explanatory prose.
+Return only one json object. Never include Markdown or explanatory prose.
 Use normalized image coordinates in the unrotated input image: x grows from
 left to right and y grows from top to bottom.
 If the target is visible, return exactly:
@@ -73,7 +73,7 @@ The bounding box must tightly cover the requested target, not nearby objects."""
 def localization_prompt(target_description: str) -> str:
     if not target_description.strip():
         raise ObjectLocalizationError("target_description must not be empty")
-    return f"Find this target: {target_description.strip()}"
+    return f"Find this target: {target_description.strip()} Reply as json."
 
 
 def _json_object(text: str) -> dict:

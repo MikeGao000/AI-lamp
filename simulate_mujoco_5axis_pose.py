@@ -58,17 +58,12 @@ def play_trajectory(
 def main() -> None:
     model = mujoco.MjModel.from_xml_path(MODEL_PATH)
     data = mujoco.MjData(model)
-    sequence = (
-        "look_left", "idle", "look_right", "idle",
-        "listening_pose", "idle",
-        "nod_up", "nod_down", "idle",
-        "curious_left", "curious_right", "idle",
-        "head_shake_left", "head_shake_right", "idle",
-        "reading_pose", "idle",
-    )
+    # Keep this derived from the library so a newly taught pose is visible
+    # immediately rather than being silently omitted from the preview.
+    sequence = tuple(name for pose_name in POSE_LIBRARY for name in (pose_name, "idle"))
     targets = {"idle": IDLE_POSE, **POSE_LIBRARY}
     current = dict(IDLE_POSE)
-    print("Five-axis pose loop: production limits + minimum-jerk trajectory; close the window to stop.")
+    print("Complete five-axis pose-library loop: production limits + minimum-jerk trajectory; close the window to stop.")
     with mujoco.viewer.launch_passive(model, data) as viewer:
         while viewer.is_running():
             for pose_name in sequence:

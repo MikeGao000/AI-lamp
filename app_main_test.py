@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 from pathlib import Path
 
 from app_main import accept_page_jpeg, cloud_client
@@ -27,7 +28,27 @@ from lamp_core.speech import (
     WavFileSpeech,
 )
 from lamp_core.virtual_hardware import VirtualMotorBus
+from lamp_core.vision import Picamera2FrameSource
 from simulate_system import LIMITS
+
+
+def capture_production_camera_jpeg(output_path: Path, warmup_s: float = 2.0) -> None:
+    """Capture one retained test page through the production Pi camera adapter."""
+
+    source = Picamera2FrameSource()
+    try:
+        time.sleep(warmup_s)
+        # Exercise the same high-resolution still path used by production after
+        # its low-resolution tracking stream declares the page stable.
+        source.capture_jpeg_and_motion()
+        jpeg = source.capture_high_resolution_jpeg()
+    finally:
+        source.close()
+    if not jpeg:
+        raise RuntimeError("production camera returned an empty JPEG")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_bytes(jpeg)
+    print(f"Production camera JPEG written: {output_path} ({len(jpeg)} bytes)")
 
 
 def run_image_hardware_substitution_test(
@@ -134,7 +155,12 @@ if __name__ == "__main__":
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(errors="backslashreplace")
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("image", type=Path, help="JPEG image used in place of the Pi camera")
+    parser.add_argument("image", nargs="?", type=Path, help="existing JPEG used in place of the Pi camera")
+    parser.add_argument(
+        "--camera-capture",
+        type=Path,
+        help="capture this JPEG with the production Picamera2 adapter, then run the real cloud/TTS path",
+    )
     parser.add_argument("--wav", type=Path, default=Path("lamp-test.wav"), help="WAV output path")
     parser.add_argument(
         "--result-json",
@@ -147,11 +173,17 @@ if __name__ == "__main__":
         help="Test-only accepted prior-page context; never substitutes for a live camera page.",
     )
     args = parser.parse_args()
+    if (args.image is None) == (args.camera_capture is None):
+        parser.error("provide exactly one existing image or --camera-capture OUTPUT.jpg")
     load_dotenv()
     try:
+        image_path = args.image
+        if args.camera_capture is not None:
+            capture_production_camera_jpeg(args.camera_capture)
+            image_path = args.camera_capture
         run_image_hardware_substitution_test(
             AppConfig.from_environment(),
-            args.image,
+            image_path,
             args.wav,
             args.result_json,
             args.previous_page_context,

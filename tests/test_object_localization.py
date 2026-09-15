@@ -29,6 +29,7 @@ class ObjectLocalizationTests(unittest.TestCase):
         self.assertAlmostEqual(0.4, detection.center_x)
         self.assertAlmostEqual(0.55, detection.center_y)
         self.assertIn("blue package", client.calls[0][1])
+        self.assertIn("json", client.calls[0][1])
 
     def test_not_found_is_a_valid_vision_result(self):
         self.assertIsNone(locate_target(b"jpeg", FakeVisionClient('{"found":false}'), "a book"))

@@ -12,6 +12,8 @@ from lamp_core.mks_can_protocol import (
     read_motor_rpm,
     set_bus_enabled,
     set_synchronised_start,
+    set_working_mode,
+    set_zero_point,
     trigger_synchronised_start,
 )
 
@@ -44,3 +46,11 @@ class MksCanProtocolTests(unittest.TestCase):
             absolute_coordinate_move(1, 3001, 2, 0, ChecksumMode.ADDITIVE)
         with self.assertRaises(ValueError):
             absolute_coordinate_move(1, 1, 2, 2**23, ChecksumMode.ADDITIVE)
+
+    def test_documented_bus_foc_mode_and_zero_point_vectors(self) -> None:
+        mode = ChecksumMode.ADDITIVE
+        # Manual 11.4.3: 01 82 05 88 selects Bus FOC mode; 01 92 93 zeroes the coordinate.
+        self.assertEqual(bytes.fromhex("82 05 88"), set_working_mode(1, 0x05, mode).data)
+        self.assertEqual(bytes.fromhex("92 93"), set_zero_point(1, mode).data)
+        with self.assertRaises(ValueError):
+            set_working_mode(1, 0x100, mode)

@@ -6,3 +6,19 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 data/
+datasets/
+tmp/
+
+# Local camera/TTS diagnostics; source fixtures belong under tests/fixtures.
+alignment-*.jpg
+book-*-diagnostic*.jpg
+book-localization-*.jpg
+camera-retest*
+camera-test.jpg
+color-fixed-highres.jpg
+current-preview-*.jpg
+live-camera-*
+semantic-*.jpg
+tracking-*.jpg
+*.wav
+*-test-result.json

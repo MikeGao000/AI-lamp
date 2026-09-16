@@ -76,6 +76,190 @@ def localization_prompt(target_description: str) -> str:
     return f"Find this target: {target_description.strip()} Reply as json."
 
 
+def confirmation_instructions() -> str:
+    """Binary presence question; far more reliable than pixel-perfect boxes."""
+
+    return """You decide whether a requested target is present in one image.
+Return only one json object. Never include Markdown or explanatory prose.
+If any portion of the target is visible (including a page cropped by the image
+edge, rotated, or partly occluded), return exactly: {"found":true}
+If none of the target is visible, return exactly: {"found":false}"""
+
+
+def confirmation_prompt(target_description: str, *, cropped_region: bool = False) -> str:
+    if not target_description.strip():
+        raise ObjectLocalizationError("target_description must not be empty")
+    description = target_description.strip()
+    if cropped_region:
+        return (
+            "This image is a crop of exactly one region taken from a larger photo. "
+            f"Does this cropped region itself show {description}? "
+            "Judge only this crop, not whatever else might exist in the original photo. "
+            "Reply as json."
+        )
+    return f"Is any portion of this target visible? {description} Reply as json."
+
+
+def confirm_target_present(
+    jpeg: bytes,
+    client: StoryClient,
+    target_description: str,
+    *,
+    cropped_region: bool = False,
+) -> bool:
+    """Ask only whether the target is present; no bounding box is required.
+
+    With ``cropped_region`` the question is scoped to one local candidate crop,
+    so a region that is *not* a book is rejected even when a book happens to be
+    visible somewhere else in the frame. Without it the question is global.
+    """
+
+    if not jpeg:
+        raise ObjectLocalizationError("image must not be empty")
+    response = client.describe_page(
+        jpeg,
+        prompt=confirmation_prompt(target_description, cropped_region=cropped_region),
+        system_instructions=confirmation_instructions(),
+    )
+    payload = _json_object(response)
+    if payload.get("found") is True:
+        return True
+    if payload.get("found") is False:
+        return False
+    raise ObjectLocalizationError("vision response must declare found true or false")
+
+
+def selection_instructions() -> str:
+    """Pick which numbered rectangle contains the target (classification, not regression)."""
+
+    return """You choose which numbered rectangle drawn on one image contains a target.
+Return only one json object. Never include Markdown or explanatory prose.
+If exactly one numbered rectangle contains the target, return exactly: {"choice": N}
+where N is that rectangle's number.
+If no numbered rectangle contains the target, return exactly: {"choice": 0}"""
+
+
+def selection_prompt(target_description: str, count: int) -> str:
+    if not target_description.strip():
+        raise ObjectLocalizationError("target_description must not be empty")
+    if count < 1:
+        raise ObjectLocalizationError("at least one candidate rectangle is required")
+    return (
+        f"The image has {count} numbered rectangles drawn on it. Which single numbered "
+        f"rectangle contains {target_description.strip()}? Consider only the pixels inside "
+        "each rectangle. Reply as json."
+    )
+
+
+def choose_candidate_index(
+    jpeg: bytes,
+    client: StoryClient,
+    target_description: str,
+    count: int,
+) -> int:
+    """Return the 1-based number of the rectangle the model chose, or 0 for none.
+
+    Choosing among a handful of local candidates is a classification, which the
+    vision model does far more reliably than emitting a precise pixel box.
+    """
+
+    if not jpeg:
+        raise ObjectLocalizationError("image must not be empty")
+    response = client.describe_page(
+        jpeg,
+        prompt=selection_prompt(target_description, count),
+        system_instructions=selection_instructions(),
+    )
+    payload = _json_object(response)
+    choice = payload.get("choice")
+    if isinstance(choice, bool) or not isinstance(choice, int):
+        raise ObjectLocalizationError("vision response must contain an integer choice")
+    if not 0 <= choice <= count:
+        raise ObjectLocalizationError("vision response choice is outside the offered rectangles")
+    return choice
+
+
+@dataclass(frozen=True)
+class PageReading:
+    """One combined locate-and-read answer for a picture-book page."""
+
+    bbox_norm: tuple[float, float, float, float]
+    visible_text: str
+    confidence: float
+
+
+def page_instructions() -> str:
+    return """You find and read one children's picture book page in a single photo.
+Return only one json object. Never include Markdown or explanatory prose.
+If any portion of an open children's picture book page is visible, return exactly:
+{"found":true,"bbox_norm":[x1,y1,x2,y2],"visible_text":"printed words you can read","confidence":0.0}
+bbox_norm must cover every visible pixel of that book page in normalized coordinates, where
+x grows left to right and y grows top to bottom, so a page cropped by the image edge is still
+allowed. visible_text must quote only printed words that are genuinely legible, and must be an
+empty string when there are none.
+If no picture book page is visible, return exactly: {"found":false}
+Exclude computer screens, product packaging, loose unrelated papers, cables, motors, furniture
+and background objects."""
+
+
+def page_prompt(target_description: str) -> str:
+    if not target_description.strip():
+        raise ObjectLocalizationError("target_description must not be empty")
+    return (
+        f"Find and read {target_description.strip()} in this photo. Return both the bounding "
+        "box of the visible page and any legible printed text. Reply as json."
+    )
+
+
+def locate_page(
+    jpeg: bytes,
+    client: StoryClient,
+    target_description: str,
+) -> PageReading | None:
+    """Locate the page and read its text in one request, so the caller pays once.
+
+    The tracker needs the box to steer and the reading flow needs the words; both
+    come back from this single call instead of a locate call followed by a second
+    recognition call on the same frame.
+    """
+
+    if not jpeg:
+        raise ObjectLocalizationError("image must not be empty")
+    response = client.describe_page(
+        jpeg,
+        prompt=page_prompt(target_description),
+        system_instructions=page_instructions(),
+    )
+    payload = _json_object(response)
+    if payload.get("found") is False:
+        return None
+    if payload.get("found") is not True:
+        raise ObjectLocalizationError("vision response must declare found true or false")
+    raw_box = payload.get("bbox_norm")
+    if (
+        not isinstance(raw_box, list)
+        or len(raw_box) != 4
+        or any(isinstance(value, bool) or not isinstance(value, (int, float)) for value in raw_box)
+    ):
+        raise ObjectLocalizationError("bbox_norm must be four numeric values")
+    raw_text = payload.get("visible_text", "")
+    raw_confidence = payload.get("confidence", 0.0)
+    reading = PageReading(
+        tuple(float(value) for value in raw_box),
+        raw_text.strip() if isinstance(raw_text, str) else "",
+        float(raw_confidence)
+        if isinstance(raw_confidence, (int, float)) and not isinstance(raw_confidence, bool)
+        else 0.0,
+    )
+    TargetDetection(
+        "book-page",
+        "book page",
+        reading.bbox_norm,
+        reading.confidence,
+    ).validate()
+    return reading
+
+
 def _json_object(text: str) -> dict:
     cleaned = text.strip()
     if cleaned.startswith("```"):

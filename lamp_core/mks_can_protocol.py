@@ -64,6 +64,24 @@ def set_bus_enabled(address: int, enabled: bool, mode: ChecksumMode) -> CanFrame
     return _frame(address, bytes((0xF3, int(enabled))), mode)
 
 
+def set_working_mode(address: int, working_mode: int, mode: ChecksumMode) -> CanFrame:
+    """Command 0x82: set the working mode (0x05 = Bus FOC position mode).
+
+    The F5 absolute-coordinate command is only meaningful in this closed-loop
+    position mode, so the real-time follower must select it before moving.
+    """
+
+    if not 0 <= working_mode <= 0xFF:
+        raise ValueError("working mode must fit one byte")
+    return _frame(address, bytes((0x82, working_mode)), mode)
+
+
+def set_zero_point(address: int, mode: ChecksumMode) -> CanFrame:
+    """Command 0x92: mark the current position as the coordinate zero point."""
+
+    return _frame(address, b"\x92", mode)
+
+
 def set_synchronised_start(address: int, enabled: bool, mode: ChecksumMode) -> CanFrame:
     """Command 0x4A: cache a move until a broadcast 0x4B is received."""
     return _frame(address, bytes((0x4A, int(enabled))), mode)

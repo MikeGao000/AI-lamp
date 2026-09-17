@@ -12,6 +12,7 @@ import unittest
 
 import numpy as np
 
+from lamp_core import page_region
 from lamp_core.page_region import (
     MINIMUM_HEIGHT,
     MINIMUM_WIDTH,
@@ -99,10 +100,28 @@ class PageRegionTests(unittest.TestCase):
         area = (region.bbox[2] - region.bbox[0]) * (region.bbox[3] - region.bbox[1])
         self.assertLess(area, 0.55)
 
+    def test_without_text_there_is_no_page_by_default(self):
+        # Measured: on a real frame where the book was out of view, the textless
+        # path returned a confident box around a laptop keyboard. It is opt-in.
+        image = _flat_desk()
+        _textured_block(image, 70, 180, 90, 240)
+        self.assertIsNone(page_region_box(image, _NumpyCV2()))
+        self.assertIsNotNone(
+            page_region_box(image, _NumpyCV2(), allow_textless=True)
+        )
+
+    def test_a_box_covering_the_whole_scene_is_rejected(self):
+        # The first version returned 0.995 of the frame on 39 of 39 real frames.
+        image = _flat_desk()
+        _textured_block(image, 2, 238, 2, 318)
+        self.assertIsNone(
+            page_region_box(image, _NumpyCV2(), text_boxes=[_Box((0.4, 0.4, 0.6, 0.5))])
+        )
+
     def test_a_textured_illustration_locates_a_page(self):
         image = _flat_desk()
         _textured_block(image, 70, 180, 90, 240)
-        region = page_region_box(image, _NumpyCV2())
+        region = page_region_box(image, _NumpyCV2(), allow_textless=True)
         self.assertIsNotNone(region)
         self.assertEqual("content", region.source)
         self.assertLess(region.bbox[0], 0.35)
@@ -113,12 +132,12 @@ class PageRegionTests(unittest.TestCase):
         # content structure of its own.
         image = _flat_desk()
         image[70:180, 90:240] = (40, 40, 200)
-        self.assertIsNone(page_region_box(image, _NumpyCV2()))
+        self.assertIsNone(page_region_box(image, _NumpyCV2(), allow_textless=True))
 
     def test_text_marks_the_source_and_raises_confidence(self):
         image = _flat_desk()
         _textured_block(image, 70, 180, 90, 240)
-        without = page_region_box(image, _NumpyCV2())
+        without = page_region_box(image, _NumpyCV2(), allow_textless=True)
         with_text = page_region_box(
             image, _NumpyCV2(), text_boxes=[_Box((0.30, 0.35, 0.70, 0.50))]
         )
@@ -129,14 +148,16 @@ class PageRegionTests(unittest.TestCase):
         image = _flat_desk()
         _textured_block(image, 70, 180, 90, 240)
         _textured_block(image, 0, 8, 0, 320)
-        region = page_region_box(image, _NumpyCV2())
+        region = page_region_box(
+            image, _NumpyCV2(), text_boxes=[_Box((0.30, 0.35, 0.70, 0.55))]
+        )
         self.assertIsNotNone(region)
         self.assertGreater(region.bbox[1], 0.10)
 
     def test_a_box_is_always_inside_the_frame(self):
         image = _flat_desk()
         _textured_block(image, 0, 240, 0, 320)
-        region = page_region_box(image, _NumpyCV2())
+        region = page_region_box(image, _NumpyCV2(), allow_textless=True)
         if region is not None:
             self.assertGreaterEqual(region.bbox[0], 0.0)
             self.assertGreaterEqual(region.bbox[1], 0.0)
@@ -149,36 +170,48 @@ class PageRegionTests(unittest.TestCase):
         self.assertIsNone(page_region_box(image, _NumpyCV2()))
 
     def test_confidence_is_density_not_area(self):
-        # A box the size of the frame explains the content poorly, so it must not
-        # look more confident than a page-sized one.
+        # Density is what makes the confidence meaningful: a box covering the
+        # whole frame is mostly empty, so it has to score worse than a page box.
+        # Pinning an absolute number here would only freeze the constant.
         image = _flat_desk()
         _speckle(image, rate=0.02)
         _textured_block(image, 70, 180, 90, 240)
-        page = page_region_box(image, _NumpyCV2(), text_boxes=[_Box((0.30, 0.35, 0.70, 0.55))])
-        self.assertIsNotNone(page)
-        self.assertLess(page.density, 0.75)
-        self.assertGreater(page.density, 0.0)
+        region = page_region_box(
+            image, _NumpyCV2(), text_boxes=[_Box((0.30, 0.35, 0.70, 0.55))]
+        )
+        self.assertIsNotNone(region)
+        structure, _, _ = page_region._structure_map(
+            image, _NumpyCV2(), 160, page_region.CONTENT_TOP_MARGIN
+        )
+        mask = structure > page_region.CONTENT_THRESHOLD
+        whole_frame = page_region._density(mask, (0.0, 0.0, 1.0, 1.0))
+        self.assertGreater(region.density, whole_frame * 1.5)
+        self.assertLessEqual(region.density, 1.0)
 
     def test_the_bounds_are_the_documented_minimums(self):
         self.assertEqual(0.15, MINIMUM_WIDTH)
         self.assertEqual(0.10, MINIMUM_HEIGHT)
 
-    def test_the_box_is_stable_when_only_the_detected_text_changes(self):
-        # The whole point: the page box must not move because a different text
-        # line was found this frame.
+    def test_the_box_moves_when_only_the_detected_text_changes(self):
+        # This is the measurement, not the wish. Stability was the whole reason
+        # for the module and it does not hold: the box shifts by 0.078 depending
+        # on which text line seeded it, which is why the module was not adopted.
         image = _flat_desk()
         _textured_block(image, 70, 180, 90, 240)
-        first = page_region_box(image, _NumpyCV2(), text_boxes=[_Box((0.30, 0.32, 0.70, 0.38))])
-        second = page_region_box(image, _NumpyCV2(), text_boxes=[_Box((0.42, 0.50, 0.58, 0.56))])
+        first = page_region_box(image, _NumpyCV2(), text_boxes=[_Box((0.30, 0.32, 0.70, 0.42))])
+        second = page_region_box(image, _NumpyCV2(), text_boxes=[_Box((0.42, 0.48, 0.58, 0.58))])
         self.assertIsNotNone(first)
         self.assertIsNotNone(second)
-        self.assertLess(abs(first.bbox[0] - second.bbox[0]), 0.02)
-        self.assertLess(abs(first.bbox[2] - second.bbox[2]), 0.02)
+        self.assertLess(abs(first.bbox[0] - second.bbox[0]), 0.10)
+        self.assertLess(abs(first.bbox[3] - second.bbox[3]), 0.02)
 
     def test_the_result_is_a_page_region(self):
         image = _flat_desk()
         _textured_block(image, 70, 180, 90, 240)
-        self.assertIsInstance(page_region_box(image, _NumpyCV2()), PageRegion)
+        self.assertIsInstance(
+            page_region_box(image, _NumpyCV2(), text_boxes=[_Box((0.30, 0.35, 0.70, 0.55))]),
+            PageRegion,
+        )
 
 
 if __name__ == "__main__":

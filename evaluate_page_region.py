@@ -33,6 +33,24 @@ def _contains(outer, inner) -> bool:
     )
 
 
+def _text_union(text_boxes):
+    """Union of the detected text boxes, with no padding applied.
+
+    Containment has to be judged against this rather than against the anchor:
+    the anchor is deliberately grown by 15% while the page box's seed is grown by
+    4%, so comparing the two reported 18 of 38 real frames as "the box misses the
+    text" when the only excess was the anchor's own padding.
+    """
+
+    if not text_boxes:
+        return None
+    xs = [v for box in text_boxes for v in (box.bbox[0], box.bbox[2])]
+    ys = [v for box in text_boxes for v in (box.bbox[1], box.bbox[3])]
+    if not xs or not ys:
+        return None
+    return (min(xs), min(ys), max(xs), max(ys))
+
+
 def main() -> None:
     args = build_parser().parse_args()
     import cv2
@@ -71,6 +89,7 @@ def main() -> None:
             continue
         text_boxes = detector.detect(image)
         text_anchor = text_anchor_box(text_boxes)
+        text_union = _text_union(text_boxes)
         region = page_region_box(image, cv2, text_boxes=text_boxes)
         name = os.path.basename(path)
 
@@ -89,9 +108,9 @@ def main() -> None:
             page_area = (region.bbox[2] - region.bbox[0]) * (region.bbox[3] - region.bbox[1])
             page_areas.append(page_area)
             holds = "-"
-            if text_anchor is not None:
+            if text_union is not None:
                 both += 1
-                ok = _contains(region.bbox, text_anchor)
+                ok = _contains(region.bbox, text_union)
                 contains += int(ok)
                 holds = "yes" if ok else "no"
             print(

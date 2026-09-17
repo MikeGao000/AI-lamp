@@ -1,5 +1,10 @@
+import os
+import shutil
+import tempfile
 import time
 import unittest
+
+import numpy as np
 from unittest.mock import patch
 
 import camera_preview
@@ -73,7 +78,15 @@ class _FakeCV:
 
 
 class _FakeImage:
+    """Stands in for a camera frame.
+
+    ``size`` is non-zero because the production code guards a crop with it before
+    handing it to the text detector: a real frame sliced down to a crop has pixels, and
+    a fake that reported zero would silently mean "this crop is empty".
+    """
+
     shape = (480, 640, 3)
+    size = 480 * 640 * 3
 
     def __getitem__(self, key):
         return self
@@ -105,9 +118,53 @@ class CameraPreviewTests(unittest.TestCase):
         self.assertIn("computer screens", description)
         self.assertIn("product packaging", description)
 
-    def test_kcf_is_default_local_tracker(self):
+    def test_mil_is_the_default_local_tracker(self):
+        # Measured on the Pi: MIL 277 ms per update, CSRT 1655 ms, KCF 2152 ms.
         args = camera_preview.build_parser().parse_args([])
-        self.assertEqual("kcf", args.opencv_tracker)
+        self.assertEqual("mil", args.opencv_tracker)
+
+    def test_the_tracker_factory_uses_the_named_tracker(self):
+        class FakeTracker:
+            def init(self, image, bbox):
+                self.bbox = bbox
+
+        created: list[str] = []
+
+        def make(label):
+            def factory():
+                created.append(label)
+                return FakeTracker()
+            return factory
+
+        fake = type("FakeCV", (), {})()
+        for name in ("mil", "kcf", "csrt"):
+            setattr(fake, f"Tracker{name.upper()}_create", make(name))
+
+        tracker = camera_preview.SemanticBookTracker.__new__(
+            camera_preview.SemanticBookTracker
+        )
+        tracker.tracker_name = "csrt"
+        tracker._init_tracker(fake, _FakeImage(), (0, 0, 10, 10))
+        self.assertEqual(["csrt"], created)
+
+    def test_the_tracker_factory_falls_back_when_a_name_is_unavailable(self):
+        class FakeTracker:
+            def init(self, image, bbox):
+                self.bbox = bbox
+
+        created: list[str] = []
+
+        def factory():
+            created.append("mil")
+            return FakeTracker()
+
+        fake = type("FakeCV", (), {"TrackerMIL_create": staticmethod(factory)})()
+        tracker = camera_preview.SemanticBookTracker.__new__(
+            camera_preview.SemanticBookTracker
+        )
+        tracker.tracker_name = "csrt"
+        tracker._init_tracker(fake, _FakeImage(), (0, 0, 10, 10))
+        self.assertEqual(["mil"], created)
 
     def test_text_selects_the_containing_page_not_the_text_fragment(self):
         text_box = (10, 20, 100, 30)
@@ -295,6 +352,7 @@ class _FakeTextDetector:
         self.boxes = boxes
         self._available = available
         self.calls = 0
+        self.last_shape = None
 
     @property
     def available(self):
@@ -302,6 +360,7 @@ class _FakeTextDetector:
 
     def detect(self, image):
         self.calls += 1
+        self.last_shape = getattr(image, "shape", None)
         return self.boxes
 
 
@@ -1301,6 +1360,405 @@ class ConfirmationTrustTests(unittest.TestCase):
         tracker._pick_candidate(_FakeImage(), _FakeCV(), stale_generation)
         self.assertIsNone(tracker._pending_bbox)
         self.assertIsNone(tracker._anchor_bbox)
+
+
+class DocumentBBoxTests(unittest.TestCase):
+    """The contour page upgrade is the local half of "follow the page".
+
+    A module-level function reached for a name that was only imported inside
+    another function, so the capture loop raised NameError and served nothing but
+    that error. These keep the contract honest.
+    """
+
+    def test_priority_target_without_a_detector_does_not_raise(self):
+        with (
+            patch("camera_preview.detect_text_bbox", return_value=(10, 10, 100, 40)),
+            patch("camera_preview.detect_document_bbox", return_value=(0, 0, 300, 200)),
+        ):
+            bbox, priority = camera_preview.detect_priority_target(_FakeImage(), _FakeCV())
+        self.assertEqual((0, 0, 300, 200), bbox)
+        self.assertEqual("book_page_with_text", priority)
+
+    def test_priority_target_accepts_a_text_detector(self):
+        # The point of this case is that the PP-OCR path runs at all: the same
+        # function reaches for text_anchor_box, which used to be imported only
+        # inside another function, so the capture loop died with NameError.
+        detector = _FakeTextDetector([TextBox((0.30, 0.20, 0.70, 0.40), 0.98)])
+        with patch("camera_preview.detect_document_bbox", return_value=None) as contour:
+            bbox, priority = camera_preview.detect_priority_target(
+                _FakeImage(), _FakeCV(), text_detector=detector
+            )
+        self.assertEqual(1, detector.calls)
+        self.assertIsNotNone(bbox)
+        self.assertEqual("text_fallback", priority)
+        # The evidence it passed on must be the PP-OCR anchor, not the naive one.
+        self.assertIsNotNone(contour.call_args.kwargs["text_evidence"])
+
+    def test_a_stable_local_page_may_supply_the_geometry(self):
+        local = (0, 140, 800, 620)
+        semantic = (160, 145, 795, 605)
+        chosen, priority = camera_preview.choose_tracking_target(
+            local, "book_page_with_text", semantic, local_stable=True
+        )
+        self.assertEqual(local, chosen)
+        self.assertEqual("semantic_book", priority)
+
+    def test_an_unstable_local_page_does_not_supply_the_geometry(self):
+        local = (0, 140, 800, 620)
+        semantic = (160, 145, 795, 605)
+        chosen, _ = camera_preview.choose_tracking_target(
+            local, "book_page_with_text", semantic, local_stable=False
+        )
+        self.assertEqual(semantic, chosen)
+
+    def test_a_local_box_elsewhere_in_the_frame_is_ignored(self):
+        local = (600, 500, 300, 200)
+        semantic = (160, 145, 795, 605)
+        chosen, _ = camera_preview.choose_tracking_target(
+            local, "book_page_with_text", semantic, local_stable=True
+        )
+        self.assertEqual(semantic, chosen)
+
+    def test_without_a_semantic_box_nothing_steers(self):
+        chosen, priority = camera_preview.choose_tracking_target(
+            (0, 140, 800, 620), "book_page_with_text", None, local_stable=True
+        )
+        self.assertIsNone(chosen)
+        self.assertEqual("awaiting_semantic_book_page_with_text", priority)
+
+
+class ScanAngleScoreTests(unittest.TestCase):
+    """The sweep must be able to rank angles without the cloud.
+
+    page_score is zero until the cloud has produced an anchor, so scoring the
+    sweep on it alone left every angle tied at zero and finding the book depended
+    on the cloud. The local candidate is available on the frame already in hand.
+    """
+
+    def follower(self):
+        follower = camera_preview.RealtimeJ1Follower.__new__(
+            camera_preview.RealtimeJ1Follower
+        )
+        return follower
+
+    def test_the_local_candidate_area_scores_an_angle(self):
+        follower = self.follower()
+        score = follower._scan_angle_score(
+            {"page_score": 0.0, "local_candidate_norm": [0.2, 0.2, 0.8, 0.7]}
+        )
+        self.assertAlmostEqual(0.6 * 0.5, score, places=6)
+
+    def test_a_cloud_score_wins_when_it_exists(self):
+        follower = self.follower()
+        score = follower._scan_angle_score(
+            {"page_score": 0.42, "local_candidate_norm": [0.2, 0.2, 0.8, 0.7]}
+        )
+        self.assertAlmostEqual(0.42, score, places=6)
+
+    def test_an_empty_alignment_scores_zero(self):
+        follower = self.follower()
+        self.assertEqual(0.0, follower._scan_angle_score({}))
+
+    def test_a_malformed_candidate_scores_zero(self):
+        follower = self.follower()
+        self.assertEqual(
+            0.0,
+            follower._scan_angle_score({"local_candidate_norm": [0.2, 0.2, "x", 0.7]}),
+        )
+        self.assertEqual(0.0, follower._scan_angle_score({"local_candidate_norm": [1]}))
+
+    def test_a_wider_local_candidate_scores_higher(self):
+        follower = self.follower()
+        narrow = follower._scan_angle_score(
+            {"local_candidate_norm": [0.4, 0.3, 0.6, 0.6]}
+        )
+        wide = follower._scan_angle_score(
+            {"local_candidate_norm": [0.1, 0.2, 0.9, 0.8]}
+        )
+        self.assertGreater(wide, narrow)
+
+
+class _CVWithColour:
+    """Minimal cv2 stand-in that reports cvtColor and imencode.
+
+    _pick_candidate only asks the page-contour path when the cv2 module can do
+    cvtColor; _FakeCV deliberately cannot, so this adds just what is needed rather
+    than widening the shared fake and disturbing other tests.
+    """
+
+    cvtColor = staticmethod(lambda image, code: image)
+    IMWRITE_JPEG_QUALITY = 1
+
+    @staticmethod
+    def imencode(extension, image, params=None):
+        return True, _FakeBuffer()
+
+
+class LocalAcquisitionTests(unittest.TestCase):
+    """A page contour that contains the text may acquire without the cloud.
+
+    Previously any local box was discarded whenever a cloud client existed, so
+    every acquisition came from the cloud -- which localises badly (measured: its
+    box centre equalled the image centre on every call). A contour that *covers*
+    the detected text is the page itself, not a text block on another object, so
+    it can acquire; a bare text box still cannot, which keeps the protection
+    against following a laptop screen.
+    """
+
+    def tracker(self):
+        detector = _FakeTextDetector([TextBox((0.30, 0.25, 0.70, 0.45), 0.98)])
+        return camera_preview.SemanticBookTracker(object(), text_detector=detector)
+
+    def test_a_page_contour_containing_the_text_acquires_locally(self):
+        tracker = self.tracker()
+        with (
+            patch("lamp_core.object_localization.locate_page", return_value=None),
+            patch("camera_preview.detect_document_bbox",
+                  return_value=(60, 60, 400, 380)),
+        ):
+            tracker._pick_candidate(_FakeImage(), _CVWithColour())
+        self.assertEqual("local_text", tracker._anchor_source, tracker.status)
+
+    def test_a_bare_text_box_still_waits_for_the_cloud(self):
+        tracker = self.tracker()
+        with (
+            patch("lamp_core.object_localization.locate_page", return_value=None),
+            patch("camera_preview.detect_document_bbox", return_value=None),
+            patch("camera_preview.detect_candidate_boxes", return_value=[]),
+        ):
+            tracker._pick_candidate(_FakeImage(), _FakeCV())
+        self.assertIsNone(tracker._anchor_source)
+
+
+class PageHypothesisTargetTests(unittest.TestCase):
+    """The local candidate should be the page, seeded by the salient hypothesis.
+
+    Measured: the text-driven seed is contaminated by the monitor's own text, so the
+    page contour fired on only 13 of 39 frames, while the salient hypothesis is
+    available on 12 of 13 sweep angles.
+    """
+
+    def test_the_hypothesis_becomes_the_candidate(self):
+        detector = _FakeTextDetector([TextBox((0.30, 0.30, 0.60, 0.40), 0.98)])
+        bbox, priority = camera_preview.detect_priority_target(
+            _FakeImage(),
+            _CVWithColour(),
+            text_detector=detector,
+            page_hypothesis=(0.1, 0.2, 0.8, 0.9),
+        )
+        # _FakeImage is 480x640, so the box in pixels is (64, 96, 448, 336).
+        self.assertEqual((64, 96, 448, 336), bbox)
+        self.assertEqual("book_page_hypothesis", priority)
+
+    def test_a_hypothesis_supplies_geometry_without_needing_stability(self):
+        # The hypothesis is the page itself and refreshes only every few seconds, so
+        # between refreshes it legitimately moves a long way. Requiring the stability
+        # that other local candidates need left the axis steering on an OpenCV tracker
+        # that had drifted off the book onto the dark background.
+        local = (0, 144, 560, 630)
+        semantic = (312, 238, 384, 384)
+        chosen, priority = camera_preview.choose_tracking_target(
+            local, "book_page_hypothesis", semantic, local_stable=False
+        )
+        self.assertEqual(local, chosen)
+        self.assertEqual("semantic_book", priority)
+
+    def test_a_hypothesis_with_text_in_the_crop_is_the_book_page(self):
+        # Crop-scoped OCR replaces the old positional ownership test: everything the
+        # detector can see is inside the page crop, so any text found there *is* the
+        # book's text. The old rule rejected text that sat outside the page box, which
+        # is exactly the test the monitor's own text kept breaking.
+        detector = _FakeTextDetector([TextBox((0.90, 0.05, 0.99, 0.12), 0.90)])
+        bbox, priority = camera_preview.detect_priority_target(
+            _FakeImage(),
+            _CVWithColour(),
+            text_detector=detector,
+            page_hypothesis=(0.1, 0.3, 0.7, 0.9),
+        )
+        self.assertEqual((64, 144, 384, 288), bbox)
+        self.assertEqual("book_page_hypothesis", priority)
+
+    def test_without_a_hypothesis_the_old_path_is_used(self):
+        detector = _FakeTextDetector([TextBox((0.30, 0.25, 0.70, 0.45), 0.98)])
+        with patch("camera_preview.detect_document_bbox", return_value=None):
+            bbox, priority = camera_preview.detect_priority_target(
+                _FakeImage(), _CVWithColour(), text_detector=detector
+            )
+        self.assertIsNotNone(bbox)
+        self.assertEqual("text_fallback", priority)
+
+
+class CanInterfaceCheckTests(unittest.TestCase):
+    """The bus being down must say so, with the fix, instead of an Errno 100 traceback.
+
+    The Pi rebooted and can0 came up DOWN, because nothing configures it at boot; the
+    only symptom was "OSError: [Errno 100] Network is down" from inside the transport.
+    """
+
+    def setUp(self):
+        self.root = tempfile.mkdtemp()
+
+    def tearDown(self):
+        shutil.rmtree(self.root, ignore_errors=True)
+
+    def write_state(self, interface, state):
+        directory = os.path.join(self.root, interface)
+        os.makedirs(directory, exist_ok=True)
+        with open(os.path.join(directory, "operstate"), "w", encoding="utf-8") as handle:
+            handle.write(state + "\n")
+
+    def test_an_up_interface_passes(self):
+        self.write_state("can0", "up")
+        camera_preview.require_can_interface("can0", operstate_root=self.root)
+
+    def test_a_down_interface_says_how_to_fix_it(self):
+        self.write_state("can0", "down")
+        with self.assertRaises(RuntimeError) as caught:
+            camera_preview.require_can_interface("can0", operstate_root=self.root)
+        self.assertIn("ip link set can0 up", str(caught.exception))
+        self.assertIn("enable_can0.sh", str(caught.exception))
+
+    def test_a_missing_interface_mentions_the_hat(self):
+        with self.assertRaises(RuntimeError) as caught:
+            camera_preview.require_can_interface("can9", operstate_root=self.root)
+        self.assertIn("CAN HAT", str(caught.exception))
+
+
+class PageCropTextTests(unittest.TestCase):
+    """Text is read on the page crop, not on the whole frame.
+
+    The detector resizes whatever it is given to a fixed long side, so this costs the
+    same either way -- what changes is which pixels are in it. That matters because the
+    previous test was a containment check against a text block that kept reaching onto
+    the monitor, which is why the contour path only fired on 13 of 39 frames.
+    """
+
+    def test_page_crop_keeps_only_the_page(self):
+        # Tested against a real array, because _FakeImage returns itself for any slice
+        # and so cannot show that the crop is smaller than the frame.
+        image = np.zeros((480, 640, 3), dtype="uint8")
+        crop = camera_preview.page_crop(image, None, (0.0, 0.0, 0.5, 0.5), margin=0.02)
+        # 0.52 * 640 = 332.8 and 0.52 * 480 = 249.6, and page_crop rounds.
+        self.assertEqual((250, 333, 3), crop.shape)
+
+    def test_page_crop_of_the_whole_frame_is_the_whole_frame(self):
+        image = np.zeros((480, 640, 3), dtype="uint8")
+        crop = camera_preview.page_crop(image, None, (0.0, 0.0, 1.0, 1.0), margin=0.0)
+        self.assertEqual((480, 640, 3), crop.shape)
+
+    def test_the_detector_is_given_a_crop_not_the_frame(self):
+        detector = _FakeTextDetector([TextBox((0.30, 0.30, 0.60, 0.40), 0.98)])
+        bbox, priority = camera_preview.detect_priority_target(
+            _FakeImage(),
+            _CVWithColour(),
+            text_detector=detector,
+            page_hypothesis=(0.0, 0.0, 0.5, 0.5),
+        )
+        self.assertEqual((0, 0, 320, 240), bbox)
+        self.assertEqual("book_page_hypothesis", priority)
+        self.assertEqual(1, detector.calls)
+
+    def test_no_text_in_the_crop_is_still_the_page(self):
+        detector = _FakeTextDetector([])
+        bbox, priority = camera_preview.detect_priority_target(
+            _FakeImage(),
+            _CVWithColour(),
+            text_detector=detector,
+            page_hypothesis=(0.1, 0.3, 0.7, 0.9),
+        )
+        self.assertEqual((64, 144, 384, 288), bbox)
+        # Distinct from the contour path's "page_rectangle": the chooser trusts a
+        # hypothesis without text, but must not trust an unconfirmed contour.
+        self.assertEqual("page_hypothesis", priority)
+
+    def test_a_hypothesis_without_text_does_not_steer(self):
+        # Measured: trusting a textless hypothesis let the monitor's bezel steer, driving
+        # the axis away from the book until nothing was left in frame.
+        local = (0, 0, 900, 500)
+        semantic = (590, 230, 330, 110)
+        chosen, _ = camera_preview.choose_tracking_target(
+            local, "page_hypothesis", semantic, local_stable=False
+        )
+        self.assertEqual(semantic, chosen)
+
+    def test_a_contour_rectangle_alone_still_needs_stability(self):
+        local = (0, 0, 900, 500)
+        semantic = (590, 230, 330, 110)
+        chosen, _ = camera_preview.choose_tracking_target(
+            local, "page_rectangle", semantic, local_stable=False
+        )
+        self.assertEqual(semantic, chosen)
+
+    def test_a_strip_is_not_a_page(self):
+        # The measured failure: 0.51 wide by 0.11 tall, the monitor's bezel.
+        self.assertFalse(camera_preview.plausible_page_box((0.017, 0.001, 0.522, 0.108)))
+        # A real page from the same rig: 0.80 x 0.80 of the frame.
+        self.assertTrue(camera_preview.plausible_page_box((0.099, 0.128, 0.899, 0.928)))
+
+    def test_an_inverted_or_empty_box_is_not_a_page(self):
+        self.assertFalse(camera_preview.plausible_page_box((0.5, 0.5, 0.5, 0.5)))
+        self.assertFalse(camera_preview.plausible_page_box((0.6, 0.1, 0.4, 0.9)))
+
+    def test_a_small_hypothesis_falls_through_to_the_text_path(self):
+        detector = _FakeTextDetector([TextBox((0.30, 0.25, 0.70, 0.45), 0.98)])
+        with patch("camera_preview.detect_document_bbox", return_value=None):
+            bbox, priority = camera_preview.detect_priority_target(
+                _FakeImage(),
+                _CVWithColour(),
+                text_detector=detector,
+                page_hypothesis=(0.0, 0.0, 0.5, 0.05),
+            )
+        self.assertNotIn(priority, ("book_page_hypothesis", "page_hypothesis"))
+        self.assertIsNotNone(bbox)
+
+
+class CloudOwnedRefinementTests(unittest.TestCase):
+    """A cloud-owned target is refined using the page hypothesis, on the page crop.
+
+    The branch used to run text detection over the whole frame and then look for a page
+    contour around it; with a hypothesis available neither is needed, and the text it
+    reads is the page's own text rather than a block that reaches onto the monitor.
+    """
+
+    def build_tracker(self, boxes):
+        tracker = camera_preview.SemanticBookTracker(
+            object(), text_detector=_FakeTextDetector(boxes)
+        )
+        tracker._anchor_source = "cloud"
+        tracker._tracker = _FakeTracker()
+        tracker._tracked_bbox_norm = (0.15, 0.25, 0.75, 0.85)
+        return tracker
+
+    def test_the_hypothesis_supplies_the_refined_geometry(self):
+        tracker = self.build_tracker([TextBox((0.2, 0.2, 0.6, 0.4), 0.9)])
+        tracker.page_hypothesis_box = (0.1, 0.2, 0.8, 0.9)
+        with (
+            patch("lamp_core.object_localization.confirm_target_present", return_value=True),
+            patch.object(
+                camera_preview.SemanticBookTracker,
+                "_crop_tracked_region",
+                return_value=_FakeImage(),
+            ),
+        ):
+            tracker._pick_candidate(_FakeImage(), _CVWithColour())
+        self.assertEqual("semantic_book_geometry_from_local_page", tracker.status)
+        # _FakeImage is 480x640: the hypothesis box is used as the tracked geometry.
+        self.assertEqual((64, 96, 448, 336), tracker._pending_bbox)
+
+    def test_no_text_in_the_crop_leaves_the_cloud_geometry_alone(self):
+        tracker = self.build_tracker([])
+        tracker.page_hypothesis_box = (0.1, 0.2, 0.8, 0.9)
+        with (
+            patch("lamp_core.object_localization.confirm_target_present", return_value=True),
+            patch.object(
+                camera_preview.SemanticBookTracker,
+                "_crop_tracked_region",
+                return_value=_FakeImage(),
+            ),
+        ):
+            tracker._pick_candidate(_FakeImage(), _CVWithColour())
+        self.assertEqual("semantic_book_confirmed_in_place", tracker.status)
+        self.assertIsNone(tracker._pending_bbox)
 
 
 if __name__ == "__main__":

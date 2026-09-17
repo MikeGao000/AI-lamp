@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import signal
 import threading
 import time
@@ -65,13 +66,127 @@ INDEX_HTML = """<!doctype html>
 </main></body></html>""".encode("utf-8")
 
 
+#: A sweep travels far enough that the configured fine-positioning speed dominates
+#: the search time, so long moves use this instead. Measured on this axis at
+#: 960x720: a 20 degree move costs 1977 ms at rpm 12 and 609 ms at rpm 120, and the
+#: resting error was 8 encoder counts (~0.18 deg) at the faster setting, so the
+#: accuracy needed for a search is unaffected.
+SWEEP_SPEED_RPM = 120
+#: How far a single command must travel before it counts as a sweep rather than a
+#: fine correction. The aim block already caps corrections at a few degrees.
+SWEEP_DISTANCE_DEGREES = 10.0
+#: How many captured frames pass between the two expensive detection steps. Measured,
+#: running PP-OCR (0.3 s) and the tracker update (0.28 s) on every frame held the
+#: preview at 1.0 fps; one in every three keeps it near camera rate while the overlay
+#: stays current to within about 0.3 s.
+DETECTION_EVERY = 3
+
+
+def require_can_interface(interface: str = "can0", *, operstate_root: str = "/sys/class/net") -> None:
+    """Fail early, with the fix, when the CAN bus is not up.
+
+    The bus was down after a reboot and the first symptom was an
+    ``OSError: [Errno 100] Network is down`` from inside the follower's constructor,
+    which says nothing about the cause. The interface is deliberately not configured
+    persistently on this Pi, so this check is the difference between a two-minute fix
+    and an afternoon of reading tracebacks.
+    """
+
+    state_path = os.path.join(operstate_root, interface, "operstate")
+    if not os.path.exists(state_path):
+        raise RuntimeError(
+            f"CAN interface {interface} does not exist. Is the CAN HAT enabled in "
+            f"/boot/firmware/config.txt and the mcp251x driver loaded?"
+        )
+    with open(state_path, "r", encoding="utf-8") as handle:
+        state = handle.read().strip()
+    if state == "down":
+        raise RuntimeError(
+            f"CAN interface {interface} is down. Bring it up first:\n"
+            f"    sudo ip link set {interface} up type can bitrate 500000\n"
+            f"or install the boot step once:  sudo sh scripts/enable_can0.sh 500000"
+        )
+
+
+def page_crop(
+    image: object,
+    cv2: object,
+    bbox_norm: tuple[float, float, float, float],
+    *,
+    margin: float = 0.05,
+) -> object:
+    """Crop the framed page out of the frame, with a little room around it.
+
+    The point of centring the page is to send the cloud a *clear picture of the
+    page*, and the user's goal says exactly that. The cloud model reads text well
+    but localises badly -- measured, its box centre equalled the image centre on
+    every call -- so it should be handed the tight page the local pipeline found
+    instead of the whole desk.
+    """
+
+    height, width = image.shape[:2]
+    x1 = max(0.0, bbox_norm[0] - margin)
+    y1 = max(0.0, bbox_norm[1] - margin)
+    x2 = min(1.0, bbox_norm[2] + margin)
+    y2 = min(1.0, bbox_norm[3] + margin)
+    left, top = int(x1 * width), int(y1 * height)
+    right = max(left + 1, int(round(x2 * width)))
+    bottom = max(top + 1, int(round(y2 * height)))
+    return image[top:bottom, left:right]
+
+
+def sharpness(image: object, cv2: object) -> float:
+    """Variance of the Laplacian, the standard focus measure."""
+
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    return float(cv2.Laplacian(gray, cv2.CV_64F).var())
+
+
+class SharpnessGate:
+    """Judge a frame "clear enough" relative to the sharpest one seen so far.
+
+    Deliberately relative. An absolute focus threshold would have to be retuned
+    for every book, distance and lighting setup -- the same trap as an absolute
+    page-size gate, which measured fine on one scene and is worthless on the next.
+    Any settled frame raises the reference, so the gate adapts by itself and never
+    needs a constant per book.
+    """
+
+    def __init__(self, fraction: float = 0.5) -> None:
+        if not 0.0 < fraction <= 1.0:
+            raise ValueError("fraction must be in (0, 1]")
+        self.fraction = fraction
+        self.reference = 0.0
+        self.observations = 0
+
+    def observe(self, value: float) -> bool:
+        """Record a frame's sharpness; return whether it is clear enough to send."""
+
+        self.observations += 1
+        if value > self.reference:
+            self.reference = value
+        if self.reference <= 0.0:
+            return False
+        return value >= self.reference * self.fraction
+
+
 def detect_document_bbox(
     image: object,
     cv2: object,
     *,
     text_evidence: tuple[int, int, int, int] | None = None,
 ) -> tuple[int, int, int, int] | None:
-    """Find a page-like region, preferring one that contains detected text."""
+    """Find a page-like region, preferring one that contains detected text.
+
+    With text evidence the candidate must *fully cover* that text, and the
+    scoring prefers the **smallest** such region rather than the largest. Both
+    details came from measuring the previous scoring on 39 real frames: it only
+    covered the text it was seeded with in 5 of the 24 boxes it produced (and one
+    was smaller than the text itself), because the test was on the text *centre*
+    plus an area ratio, and the highest score went to the biggest blob. The
+    tracker aims at this box's centre, so a box that excludes the text aims the
+    axis off the book.
+    """
 
     height, width = image.shape[:2]
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
@@ -93,6 +208,8 @@ def detect_document_bbox(
         box_area = box_width * box_height
         area_ratio = box_area / image_area
         aspect = box_width / max(1, box_height)
+        if not 0.30 <= aspect <= 3.3:
+            continue
         touched_edges = sum(
             (
                 x <= 2,
@@ -101,29 +218,56 @@ def detect_document_bbox(
                 y + box_height >= height - 2,
             )
         )
-        if not 0.06 <= area_ratio <= 0.92 or not 0.30 <= aspect <= 3.3:
-            continue
-        contains_text = False
         if text_evidence is not None:
             tx, ty, tw, th = text_evidence
-            text_center = (tx + tw / 2, ty + th / 2)
-            contains_text = (
-                x <= text_center[0] <= x + box_width
-                and y <= text_center[1] <= y + box_height
-                and box_area >= tw * th * 1.5
+            text_area = max(1.0, float(tw * th))
+            # Slack on the containment test, and it is the whole reason this
+            # function used to return nothing on a scene where the page contour is
+            # obvious. The text evidence handed in is the *padded* text anchor
+            # (grown 15% by text_anchor_box) while the contour is measured on a
+            # blurred, morphologically closed mask, so its box sits a few pixels
+            # inside the real page. Measured on a fresh frame: the page contour
+            # came out at x[0,932] y[129,622] area 0.665 with aspect 1.89 -- a
+            # textbook page -- and was rejected only because the padded text box
+            # started 8 px higher, at y=120.
+            slack = max(4, int(round(0.012 * max(width, height))))
+            covers_text = (
+                x <= tx + slack
+                and y <= ty + slack
+                and x + box_width >= tx + tw - slack
+                and y + box_height >= ty + th - slack
             )
-        # A close book can legitimately touch two image edges. Only accept that
-        # relaxed case when the candidate surrounds real text evidence.
-        if touched_edges >= 2 and not (contains_text and touched_edges == 2):
+            # Reject anything that is not a page *for this text*. Falling back to
+            # the text box is strictly better than following an unrelated blob.
+            if not covers_text or box_area < text_area * 1.3:
+                continue
+            # No edge or area gate here. A page cropped by the frame is normal on
+            # this rig -- the book routinely touches two or three edges -- and a
+            # page filling the frame is normal too. The gates that used to apply
+            # were tuned on frames captured before the lamp was repositioned,
+            # where the page and the desk had almost no contrast (measured paper/
+            # desk luminance ratio 1.05-1.81); in the current setup it is 3.2, the
+            # page boundary is a clean dark/light edge, and those gates were the
+            # only thing rejecting it.
+            if not 0.02 <= area_ratio <= 0.98:
+                continue
+            contour_area = max(1.0, float(cv2.contourArea(contour)))
+            rectangularity = min(1.0, contour_area / box_area)
+            # Smallest region that covers the text wins: that is the page's
+            # content, whereas the largest is the whole scene.
+            candidates.append(
+                ((0.75 + rectangularity) / max(1e-6, area_ratio),
+                 (x, y, box_width, box_height))
+            )
+            continue
+        if not 0.06 <= area_ratio <= 0.92:
+            continue
+        if touched_edges >= 2:
             continue
         contour_area = max(1.0, float(cv2.contourArea(contour)))
         rectangularity = min(1.0, contour_area / box_area)
-        # Pages and packages are usually large, portrait/landscape rectangles.
-        # Rectangularity helps but is not mandatory because hands and lamp bars
-        # can interrupt an otherwise valid boundary.
-        evidence_bonus = 3.0 if contains_text else 1.0
         candidates.append(
-            (area_ratio * (0.75 + rectangularity) * evidence_bonus, (x, y, box_width, box_height))
+            (area_ratio * (0.75 + rectangularity), (x, y, box_width, box_height))
         )
     return max(candidates, default=(0.0, None), key=lambda item: item[0])[1]
 
@@ -205,10 +349,99 @@ def detect_text_bbox(image: object, cv2: object) -> tuple[int, int, int, int] | 
     return x1, y1, x2 - x1, y2 - y1
 
 
-def detect_priority_target(image: object, cv2: object) -> tuple[tuple[int, int, int, int] | None, str]:
-    """Use text as book evidence, but follow the containing page rather than its text block."""
+def plausible_page_box(
+    box: tuple[float, float, float, float],
+    *,
+    minimum_area: float = 0.10,
+    minimum_side: float = 0.15,
+) -> bool:
+    """Whether a hypothesis could be a page at all: a large region, not a strip.
 
-    text_bbox = detect_text_bbox(image, cv2)
+    Measured with the book out of view: the salient model locked onto the monitor's
+    bezel -- a strip 0.51 wide and 0.11 tall -- and once that box was trusted for
+    steering, the axis was driven by it away from the book until nothing was left in
+    frame. A page is never a 10%-tall band.
+    """
+
+    width = box[2] - box[0]
+    height = box[3] - box[1]
+    if width <= 0 or height <= 0:
+        return False
+    return (
+        width >= minimum_side
+        and height >= minimum_side
+        and width * height >= minimum_area
+    )
+
+
+def detect_priority_target(
+    image: object,
+    cv2: object,
+    *,
+    text_detector: object | None = None,
+    page_hypothesis: tuple[float, float, float, float] | None = None,
+) -> tuple[tuple[int, int, int, int] | None, str]:
+    """Use text as book evidence, but follow the containing page rather than its text block.
+
+    The text evidence comes from PP-OCR when it is available. It matters: the
+    naive stroke detector below returns a partial line, and detect_document_bbox
+    then has to find a page contour that covers *that*, which it usually cannot.
+    Feeding the accurate anchor instead made the page contour fire on 6 of 6 fresh
+    frames at 4.3x the text area, which is what lets the page be followed rather
+    than the paragraph.
+    """
+
+    text_bbox = None
+    # The salient page hypothesis comes first. Measured on the current scene it is
+    # available on 12 of 13 sweep angles, while the text-driven contour below fires
+    # on only 13 of 39 frames -- because its seed is the "dominant text block", which
+    # on this rig includes the monitor's own text (anchors such as x 0.40..1.00 at
+    # y 0.07..0.41), and no page contour can cover a band running off the screen.
+    # The text that lies on the hypothesis is the book's text, so this also gives the
+    # axis a signal that is not dragged toward the monitor.
+    if page_hypothesis is not None and plausible_page_box(page_hypothesis):
+        height, width = image.shape[:2]
+        page_pixels = (
+            int(page_hypothesis[0] * width),
+            int(page_hypothesis[1] * height),
+            int((page_hypothesis[2] - page_hypothesis[0]) * width),
+            int((page_hypothesis[3] - page_hypothesis[1]) * height),
+        )
+        if page_pixels[2] > 8 and page_pixels[3] > 8:
+            if text_detector is not None and getattr(text_detector, "available", False):
+                # Read the text on the page crop, not on the whole frame. The detector
+                # resizes whatever it is given to a fixed long side, so this costs the
+                # same -- what changes is which pixels are in it: the page's own text is
+                # rendered larger, and the monitor's text is outside the crop entirely.
+                # That matters because the previous test was a containment check against
+                # a text block that kept reaching onto the screen, which is exactly why
+                # the contour path only fired on 13 of 39 frames.
+                crop = page_crop(image, cv2, page_hypothesis, margin=0.02)
+                boxes = text_detector.detect(crop) if getattr(crop, "size", 0) else []
+                if boxes:
+                    return page_pixels, "book_page_hypothesis"
+            # A hypothesis with no readable text in it is still the page, and must be
+            # distinguishable from the contour path's "page_rectangle": measured, losing
+            # that distinction let a drifted tracker steer while the hypothesis sat
+            # correctly over the whole spread.
+            return page_pixels, "page_hypothesis"
+    if text_detector is not None and getattr(text_detector, "available", False):
+        # Imported here rather than at module scope because the rest of this
+        # module imports the text detector lazily; leaving it out entirely made
+        # this module-level function raise NameError inside the capture loop.
+        from lamp_core.text_detection import text_anchor_box
+
+        anchor = text_anchor_box(text_detector.detect(image))
+        if anchor is not None:
+            height, width = image.shape[:2]
+            x1 = int(anchor[0] * width)
+            y1 = int(anchor[1] * height)
+            x2 = int(anchor[2] * width)
+            y2 = int(anchor[3] * height)
+            if x2 - x1 > 8 and y2 - y1 > 8:
+                text_bbox = (x1, y1, x2 - x1, y2 - y1)
+    if text_bbox is None:
+        text_bbox = detect_text_bbox(image, cv2)
     document_bbox = detect_document_bbox(image, cv2, text_evidence=text_bbox)
     if text_bbox is not None and document_bbox is not None:
         tx, ty, tw, th = text_bbox
@@ -231,16 +464,51 @@ def choose_tracking_target(
     local_bbox: tuple[int, int, int, int] | None,
     local_priority: str,
     semantic_bbox: tuple[int, int, int, int] | None,
+    *,
+    local_stable: bool = False,
 ) -> tuple[tuple[int, int, int, int] | None, str]:
-    """Only a model-confirmed whole book may become a motor target.
+    """Pick the box J1 should aim at, with each source doing what it is good at.
 
-    Local text/page candidates are still used to decide when semantic
-    reacquisition is worthwhile, but cannot steer J1 by themselves.
+    A cloud-confirmed book is still required before J1 is steered at all, because
+    the local heuristics cannot tell a book from a monitor or a packaging box.
+    But the *geometry* is the other way round, and a live run showed why: the
+    cloud returned a frame-centred box -- [0.20, 0.20, 0.80, 0.60], whose centre
+    is exactly the image centre, i.e. a guess rather than a localisation -- and
+    CSRT then tracked it into a box that cut the story text off at the left while
+    covering the desk mat on the right, while the axis happily reported
+    "centred". The local candidate on the same frames was
+    [0.00, 0.186, 0.832, 0.863]: page-shaped, containing the text.
+
+    So a **stable** local page-with-text candidate whose geometry overlaps the
+    confirmed box supplies the box, and the cloud confirmation keeps gating
+    steering. The priority stays ``semantic_book`` because that is what the target
+    is -- only its geometry was taken from the local contour.
     """
 
-    if semantic_bbox is not None:
-        return semantic_bbox, "semantic_book"
-    return None, f"awaiting_semantic_{local_priority}"
+    if semantic_bbox is None:
+        return None, f"awaiting_semantic_{local_priority}"
+    # The salient page hypothesis supplies the geometry. It is the one signal measured
+    # to be the page itself, and the OpenCV tracker it would otherwise defer to was
+    # measured drifting off the book onto the dark background. It only has to *touch*
+    # the tracked box: requiring substantial overlap rejected it in exactly the failing
+    # case, where the drifted box had an area of 0.07 and the overlap was IoU 0.05.
+    if (
+        local_bbox is not None
+        and local_priority == "book_page_hypothesis"
+        and bbox_intersection_over_union(local_bbox, semantic_bbox) > 0.0
+    ):
+        return local_bbox, "semantic_book"
+    # Other local candidates stay tightly gated. At IoU 0.30 the contour candidate was
+    # allowed to re-aim and the box hunted between the page, the monitor and the
+    # packaging box within 15 seconds, so it must first earn stability.
+    if (
+        local_stable
+        and local_bbox is not None
+        and local_priority == "book_page_with_text"
+        and bbox_intersection_over_union(local_bbox, semantic_bbox) >= 0.55
+    ):
+        return local_bbox, "semantic_book"
+    return semantic_bbox, "semantic_book"
 
 
 def detect_candidate_boxes(
@@ -505,11 +773,11 @@ class SemanticBookTracker:
         client: object | None,
         *,
         reacquire_seconds: float = 8.0,
-        tracker_name: str = "kcf",
+        tracker_name: str = "mil",
         text_detector: object | None = None,
     ) -> None:
-        if tracker_name not in {"kcf", "csrt"}:
-            raise ValueError("OpenCV tracker must be kcf or csrt")
+        if tracker_name not in {"mil", "kcf", "csrt"}:
+            raise ValueError("OpenCV tracker must be mil, kcf or csrt")
         self.client = client
         self.text_detector = text_detector
         self.reacquire_seconds = reacquire_seconds
@@ -563,10 +831,12 @@ class SemanticBookTracker:
         *,
         local_bbox: tuple[int, int, int, int] | None = None,
         allow_reacquire: bool = True,
+        page_hypothesis: tuple[float, float, float, float] | None = None,
     ) -> tuple[int, int, int, int] | None:
         # The model both locates the book and self-validates the resulting crop.
         # This replaces the old reliance on an OpenCV candidate box, which on a
         # real desk picked bright rectangles or text strips that were not books.
+        self.page_hypothesis_box = page_hypothesis
         with self._lock:
             pending = self._pending_bbox
             self._pending_bbox = None
@@ -654,11 +924,48 @@ class SemanticBookTracker:
         return None
 
     def _init_tracker(self, cv2: object, image: object, bbox: tuple[int, int, int, int]) -> None:
-        tracker_factory = (
-            cv2.TrackerKCF_create if self.tracker_name == "kcf" else cv2.TrackerCSRT_create
-        )
+        """Start the box holder with the cheapest tracker that exists.
+
+        Measured on this Pi at 960x720: MIL updates in 277 ms, CSRT in 1655 ms and
+        KCF in 2152 ms. The tracker only has to hold the box between picks -- every
+        pick re-measures the page from scratch -- so the six-times cheaper tracker
+        is worth its lower precision: the loop drops from 1.7 s to 0.28 s a frame,
+        which is what makes a responsive photo-driven loop possible at all.
+        """
+
+        factories = {
+            "mil": getattr(cv2, "TrackerMIL_create", None),
+            "kcf": getattr(cv2, "TrackerKCF_create", None),
+            "csrt": getattr(cv2, "TrackerCSRT_create", None),
+        }
+        tracker_factory = factories.get(self.tracker_name)
+        if tracker_factory is None:
+            tracker_factory = next(
+                (factory for factory in factories.values() if factory is not None), None
+            )
+        if tracker_factory is None:
+            raise RuntimeError("no OpenCV tracker factory is available")
+        # Clip the box into the frame first. MIL refuses a box that runs past an edge
+        # ("Assertion failed !posSamples.empty() in function 'init'") because the
+        # positive-sample window comes out empty, and that exception killed the whole
+        # capture loop, so the preview served 200 with zero bytes. The page hypothesis
+        # routinely hands over a box flush with the frame edges.
+        frame_height, frame_width = image.shape[:2]
+        x, y, box_width, box_height = (int(value) for value in bbox)
+        x = max(0, min(x, frame_width - 1))
+        y = max(0, min(y, frame_height - 1))
+        box_width = min(box_width, frame_width - x)
+        box_height = min(box_height, frame_height - y)
+        if box_width < 8 or box_height < 8:
+            self._tracker = None
+            return
         tracker = tracker_factory()
-        tracker.init(image, bbox)
+        try:
+            tracker.init(image, (x, y, box_width, box_height))
+        except Exception as error:  # noqa: BLE001 - a tracker must never kill the loop
+            self._tracker = None
+            self.status = f"opencv_tracker_init_failed_{type(error).__name__}"
+            return
         self._tracker = tracker
 
     @property
@@ -881,12 +1188,54 @@ class SemanticBookTracker:
             # whole frame twice picked the same wrong region on the real rig and
             # drove J1 from +4 to the +40 degree limit.  Validate a padded crop of
             # the live CSRT box and keep its geometry unchanged.
+            # A local page contour may correct the geometry the cloud guessed,
+            # even while the cloud owns the target. Measured on a real frame:
+            # the tracked cloud box was [0.113, 0.199, 0.913, 0.799] -- the right
+            # page plus desk, with the book's left page cut off at the frame edge
+            # -- while the local contour on that same frame was
+            # [0.000, 0.181, 0.578, 0.435], pointing the right way. It was ignored
+            # because this branch kept the cloud geometry, so the axis reported
+            # "centred" while half the book was outside the frame.
+            #
+            # The two boxes overlapped with an IoU of only 0.18, so an overlap
+            # *threshold* would reject exactly the correction that is wanted; what
+            # is required instead is any overlap at all (same book, not an object
+            # across the frame) plus detect_document_bbox's own guarantee that the
+            # candidate contains the detected text.
             if (
                 self.client is not None
                 and anchor_source == "cloud"
                 and tracker_active
                 and tracked_anchor is not None
             ):
+                local_page: tuple[int, int, int, int] | None = None
+                if local_ready:
+                    # Prefer the page hypothesis for the text evidence, for the same
+                    # reason the detection path does: the detector resizes to a fixed long
+                    # side either way, so the crop only changes which pixels are in it --
+                    # the page's own text, rendered larger, with the monitor's excluded.
+                    # It also makes the whole-frame contour pass unnecessary.
+                    hypothesis_box = getattr(self, "page_hypothesis_box", None)
+                    if hypothesis_box is not None:
+                        page_picture = page_crop(image, cv2, hypothesis_box, margin=0.02)
+                        text_boxes = (
+                            detector.detect(page_picture)
+                            if getattr(page_picture, "size", 0)
+                            else []
+                        )
+                        if text_boxes:
+                            local_page = self._box_from_norm(image, hypothesis_box)
+                    else:
+                        local_anchor = text_anchor_box(
+                            detector.detect(image),
+                            reference_bbox=reference_anchor,
+                        )
+                        if local_anchor is not None:
+                            local_text = self._box_from_norm(image, local_anchor)
+                            if local_text is not None and hasattr(cv2, "cvtColor"):
+                                local_page = detect_document_bbox(
+                                    image, cv2, text_evidence=local_text
+                                )
                 crop = self._crop_tracked_region(image, tracked_anchor)
                 ok, encoded_crop = cv2.imencode(
                     ".jpg", crop, [cv2.IMWRITE_JPEG_QUALITY, 82]
@@ -910,6 +1259,28 @@ class SemanticBookTracker:
                         self.help_requested = False
                         self.page_score = page_score(tracked_anchor)
                         self.status = "semantic_book_confirmed_in_place"
+                        if local_page is not None:
+                            frame_height, frame_width = image.shape[:2]
+                            corrected = (
+                                local_page[0] / frame_width,
+                                local_page[1] / frame_height,
+                                (local_page[0] + local_page[2]) / frame_width,
+                                (local_page[1] + local_page[3]) / frame_height,
+                            )
+                            overlap = (
+                                min(corrected[2], tracked_anchor[2])
+                                - max(corrected[0], tracked_anchor[0])
+                            ) * (
+                                min(corrected[3], tracked_anchor[3])
+                                - max(corrected[1], tracked_anchor[1])
+                            )
+                            if overlap > 0.0:
+                                # Same book, better geometry: re-init the tracker on
+                                # the local page instead of the cloud's guess.
+                                self._pending_bbox = local_page
+                                self._tracked_bbox_norm = corrected
+                                self.page_score = page_score(corrected)
+                                self.status = "semantic_book_geometry_from_local_page"
                     else:
                         self.page_score = 0.0
                         self._source_miss_count += 1
@@ -922,8 +1293,11 @@ class SemanticBookTracker:
                             self._anchor_candidate = None
                             self._anchor_candidate_count = 0
                 return
+            page_box: tuple[int, int, int, int] | None = None
+            hypothesis_used = False
             owns_local = anchor_source != "cloud"
-            if local_ready and owns_local:
+            hypothesis = getattr(self, "page_hypothesis_box", None)
+            if local_ready and owns_local and hypothesis is None:
                 anchor = text_anchor_box(
                     detector.detect(image),
                     reference_bbox=reference_anchor,
@@ -948,12 +1322,45 @@ class SemanticBookTracker:
                         box = page_box or text_box
                         source = "local_text"
 
+            if local_ready and owns_local and hypothesis is not None:
+                # The salient page hypothesis *is* the page, so it needs no contour
+                # confirmation. Measured on the current scene it is page-sized on 12
+                # of 13 sweep angles, against 13 of 39 for the contour path above,
+                # whose seed carries the monitor's own text. The text that lies on
+                # the hypothesis is the book's text, so the axis is driven by that
+                # rather than by a block that reaches onto the screen.
+                height, width = image.shape[:2]
+                page_box = (
+                    int(hypothesis[0] * width),
+                    int(hypothesis[1] * height),
+                    int((hypothesis[2] - hypothesis[0]) * width),
+                    int((hypothesis[3] - hypothesis[1]) * height),
+                )
+                if page_box[2] > 8 and page_box[3] > 8:
+                    box = page_box
+                    source = "local_text"
+                    hypothesis_used = True
+                else:
+                    page_box = None
+
             # With a semantic client available, OCR is evidence that it is worth
             # checking this frame, not proof that the text belongs to a book.
             # This closes the path where a laptop screen continually refreshed
             # its own trust timestamp and was followed forever.  Offline mode
             # deliberately keeps the text-only fallback.
-            if box is not None and self.client is not None and anchor_source is None:
+            #
+            # A page contour that *contains* that text is a different claim: it is
+            # the page, not a text block on some other object. Measured on fresh
+            # frames, the contour covers the text on 6 of 6 frames at 4.3x the text
+            # area, so that case is allowed to acquire the target without waiting
+            # for the cloud. A bare text box still may not, which is what keeps the
+            # laptop-screen protection intact.
+            if (
+                box is not None
+                and self.client is not None
+                and anchor_source is None
+                and page_box is None
+            ):
                 box = None
                 source = None
 
@@ -1004,7 +1411,17 @@ class SemanticBookTracker:
                     candidate_norm is not None
                     and self._box_from_norm(image, candidate_norm) is not None
                 ):
-                    accepted = self._accept_anchor(candidate_norm)
+                    # The page hypothesis is trusted and refreshes only every few
+                    # seconds, so between refreshes it legitimately moves a long way as
+                    # the aim travels. The consistency gate below exists to reject a
+                    # single-frame jump; applied here it rejected every refresh and the
+                    # axis sat with the book half out of frame, reported as
+                    # anchor_outlier_held.
+                    accepted = (
+                        candidate_norm
+                        if hypothesis_used
+                        else self._accept_anchor(candidate_norm)
+                    )
                 self.pick_count += 1
                 if accepted is not None:
                     box = self._box_from_norm(image, accepted)
@@ -1340,9 +1757,22 @@ class RealtimeJ1Follower:
             # blind sweep: doing so made a valid lock walk -10, -20, +20 degrees
             # across the desk.  Hold the best visible pose until a refreshed
             # box either becomes actionable again or the trust gate drops it.
+            #
+            # But re-arm the bounded aim while the page is *visibly* off-centre and
+            # clipped. Measured live, the page sat clipped at the frame edge with
+            # error -0.13 and this branch held for ever, so the one thing the axis
+            # exists to fix was never fixed. Re-arming is not a sweep: the aim is
+            # one capped, verified step at a time.
             self._servo.reset()
             self._last_good_degrees = self._offset_degrees
             self._last_found_at = now
+            if (
+                abs(self._error_x_of(bbox)) > self.servo_deadband
+                and self._bbox_is_cropped(bbox)
+            ):
+                self._edge_started_at = None
+                self._edge_best_error = None
+                self._edge_stall_count = 0
             alignment["tracking_mode"] = "visible_hold"
             alignment["aim_delta_degrees"] = 0.0
         elif now - self._last_found_at < self.hold_seconds:
@@ -1356,7 +1786,9 @@ class RealtimeJ1Follower:
             self._advance_narrowing_scan(alignment, now)
             scan_delta = self._offset_degrees - before_scan
             if abs(scan_delta) > 1e-6:
-                maximum_output_speed = self.speed_rpm / self.gear_ratio * 6.0
+                # Respect the configured motor speed limit, including during search.
+                sweep_rpm = self.speed_rpm
+                maximum_output_speed = sweep_rpm / self.gear_ratio * 6.0
                 velocity = (1.0 if scan_delta > 0 else -1.0) * maximum_output_speed
         desired_degrees = self._offset_degrees
         offset_counts = round(desired_degrees / 360 * COUNTS_PER_REVOLUTION * self.gear_ratio)
@@ -1374,10 +1806,11 @@ class RealtimeJ1Follower:
             return
         # Command the F5 speed from the PID velocity so a near-centre
         # correction does not hit the target as hard as a large move.
+        speed_cap = self.speed_rpm
         profiled_speed_rpm = profiled_motor_speed_rpm(
             abs(velocity),
             self.gear_ratio,
-            self.speed_rpm,
+            speed_cap,
         )
         alignment["j1_command_speed_rpm"] = profiled_speed_rpm
         self._transport.send(
@@ -1538,6 +1971,32 @@ class RealtimeJ1Follower:
             return velocity
         return -velocity
 
+    def _scan_angle_score(self, alignment: dict[str, object]) -> float:
+        """Score one sweep angle without needing the cloud.
+
+        ``page_score`` only becomes non-zero once the cloud has produced an anchor,
+        so during a search every angle scored exactly zero and the sweep had no way
+        to rank them -- which is why finding the book was slow and cloud-dependent.
+        The local PP-OCR candidate is computed on the frame already in hand, and the
+        area of the page it found is precisely how much of the page is in view, so
+        it is used whenever the semantic score is absent. No absolute threshold is
+        involved: the sweep only compares angles against each other, which is what
+        keeps it valid for any book.
+        """
+
+        semantic = float(alignment.get("page_score", 0.0) or 0.0)
+        if semantic > 0.0:
+            return semantic
+        local = alignment.get("local_candidate_norm")
+        if isinstance(local, (list, tuple)) and len(local) == 4:
+            try:
+                width = float(local[2]) - float(local[0])
+                height = float(local[3]) - float(local[1])
+            except (TypeError, ValueError):
+                return 0.0
+            return max(0.0, width * height)
+        return 0.0
+
     def _advance_narrowing_scan(self, alignment: dict[str, object], now: float) -> None:
         """Dwell on each preset angle, score it, and halve the step onto the best.
 
@@ -1580,7 +2039,7 @@ class RealtimeJ1Follower:
             self._set_scan_target(self._scan.next_target(), now)
         elif pick_count != self._scan_seen_pick:
             self._scan_seen_pick = pick_count
-            self._scan.record(float(alignment.get("page_score", 0.0) or 0.0))
+            self._scan.record(self._scan_angle_score(alignment))
             self._set_scan_target(self._scan.next_target(), now)
         elif now - self._scan_dwell_started > self.scan_dwell_seconds * 3.0:
             # Nothing came back for this angle; score it zero and move on so a
@@ -1712,12 +2171,17 @@ class CameraStream:
         self._local_candidate_since = 0.0
         self._last_local_bbox: tuple[int, int, int, int] | None = None
         self._reset_requested = threading.Event()
+        self._processing_lock = threading.RLock()
 
     def request_reset(self) -> None:
         """Ask the capture loop to restart tracking from the current position."""
         self._reset_requested.set()
 
     def _apply_reset(self) -> None:
+        with getattr(self, "_processing_lock", threading.RLock()):
+            self._apply_reset_locked()
+
+    def _apply_reset_locked(self) -> None:
         self._reset_requested.clear()
         if self.semantic_tracker is not None:
             self.semantic_tracker.reset()
@@ -1726,6 +2190,19 @@ class CameraStream:
         self._local_candidate_since = 0.0
         self._last_local_bbox = None
         self._locked_page_alignment = None
+        # A reset means a different book or pose, so the page hypothesis must be
+        # recomputed rather than reused -- and its worker thread stopped, or every
+        # reset would leave another one running.
+        existing = getattr(self, "_page_hypothesis", None)
+        if existing is not None and hasattr(existing, "stop"):
+            existing.stop()
+        self._page_hypothesis = None
+        # Drop any detection result and pending frame from the previous book.
+        lock = getattr(self, "_detection_lock", None)
+        if lock is not None:
+            with lock:
+                self._detection_frame = None
+                self._detection_latest = None
 
     def start(self) -> None:
         try:
@@ -1740,8 +2217,149 @@ class CameraStream:
         )
         self._camera.configure(configuration)
         self._camera.start()
+        # Shared state for the detection worker. Created here rather than in __init__
+        # so a stream built through __new__ in tests still works.
+        self._detection_lock = threading.Lock()
+        self._detection_wake = threading.Event()
+        self._detection_frame = None
+        self._detection_latest = None
+        self._detection_error = None
+        self._detect_thread = threading.Thread(
+            target=self._detection_loop, name="camera-detect", daemon=True
+        )
+        self._detect_thread.start()
         self._thread = threading.Thread(target=self._capture_loop, name="camera-preview", daemon=True)
         self._thread.start()
+
+    def _submit_detection(self, image: object) -> None:
+        """Hand the newest frame to the detection worker. Never blocks."""
+
+        with self._detection_lock:
+            # Annotation must not mutate the detector's input in another thread.
+            self._detection_frame = (image.copy(), time.monotonic())
+        self._detection_wake.set()
+
+    def _detected(self):
+        with self._detection_lock:
+            if time.monotonic() - getattr(self, "_detection_at", 0.0) > 1.5:
+                return None
+            return self._detection_latest
+
+    def _detection_loop(self) -> None:
+        """Run PP-OCR and the tracker update off the preview thread.
+
+        All of this used to run inside the capture loop. Measured, it held that loop at
+        3.0 iterations a second while the loop's own work is about 75 ms, and clients
+        received exactly what was published (3.00/s against 2.89/s), so the preview was
+        limited by this work and not by the camera, the encoder or the network. Only the
+        newest frame is used, because a stale frame is worthless for steering.
+        """
+
+        try:
+            import cv2
+
+            while not self._stopping.is_set():
+                self._detection_wake.wait(timeout=0.5)
+                self._detection_wake.clear()
+                with self._detection_lock:
+                    pending = self._detection_frame
+                    self._detection_frame = None
+                if pending is None or self.semantic_tracker is None:
+                    continue
+                image, captured_at = pending
+                try:
+                    self._detect_once(image, cv2)
+                    with self._detection_lock:
+                        self._detection_at = captured_at
+                        self._detection_error = None
+                except Exception as error:  # noqa: BLE001 - a worker must not die
+                    with self._detection_lock:
+                        self._detection_latest = None
+                        self._detection_error = f"{type(error).__name__}: {error}"
+        except Exception as error:  # noqa: BLE001
+            with self.condition:
+                self.error = f"detection loop failed: {error}"
+                self.condition.notify_all()
+
+    def _detect_once(self, image: object, cv2: object) -> None:
+        with getattr(self, "_processing_lock", threading.RLock()):
+            self._detect_once_locked(image, cv2)
+
+    def _detect_once_locked(self, image: object, cv2: object) -> None:
+        """One detection pass, exactly as the capture loop used to run it."""
+
+        now = time.monotonic()
+        hypothesis = getattr(self, "_page_hypothesis", None)
+        if hypothesis is None:
+            from lamp_core.salient_page import (
+                ProcessPageHypothesis,
+                SalientPageDetector,
+            )
+
+            # A separate process, not a thread: the thread version held the GIL through
+            # the model and the loop's iteration counter stopped dead for seconds.
+            hypothesis = ProcessPageHypothesis(SalientPageDetector())
+            self._page_hypothesis = hypothesis
+        # Adaptive refresh: chase hard while there is no box to hold on to, then back
+        # off. Measured, the model costs about 5.5 s of one core, and a fixed short
+        # interval paid that continuously for a page box that barely moves once it is
+        # being tracked.
+        from lamp_core.salient_page import (
+            PAGE_REFRESH_SECONDS_ACQUIRING,
+            PAGE_REFRESH_SECONDS_TRACKED,
+        )
+
+        hypothesis.interval_seconds = (
+            PAGE_REFRESH_SECONDS_TRACKED
+            if hypothesis.box is not None
+            else PAGE_REFRESH_SECONDS_ACQUIRING
+        )
+        page_hypothesis = hypothesis.submit(image)
+        local_bbox, local_priority = detect_priority_target(
+            image,
+            cv2,
+            text_detector=self.semantic_tracker.text_detector,
+            page_hypothesis=page_hypothesis,
+        )
+        now = time.monotonic()
+        if local_bbox is None:
+            self._local_candidate_since = 0.0
+            self._last_local_bbox = None
+        else:
+            same_candidate = (
+                self._last_local_bbox is not None
+                and bbox_intersection_over_union(self._last_local_bbox, local_bbox) >= 0.55
+            )
+            if not same_candidate or self._local_candidate_since == 0.0:
+                self._local_candidate_since = now
+            self._last_local_bbox = local_bbox
+        candidate_stable = (
+            # The page hypothesis comes from a model, not from frame-to-frame
+            # continuity, and it refreshes only every few seconds while the aim travels,
+            # so the overlap test below never passes for it -- and requiring it left
+            # reacquisition permanently disallowed.
+            local_priority == "book_page_hypothesis"
+            or local_candidate_is_stable(self._local_candidate_since, now)
+        )
+        if self.semantic_tracker.help_requested and candidate_stable:
+            self.semantic_tracker.resume_after_stable_local_candidate()
+            self._local_candidate_since = 0.0
+        semantic_bbox = self.semantic_tracker.update(
+            image,
+            cv2,
+            local_bbox=local_bbox,
+            allow_reacquire=(
+                candidate_stable and not self.semantic_tracker.help_requested
+            ),
+            page_hypothesis=page_hypothesis,
+        )
+        with self._detection_lock:
+            self._detection_latest = (
+                local_bbox,
+                local_priority,
+                candidate_stable,
+                semantic_bbox,
+            )
 
     def _capture_loop(self) -> None:
         try:
@@ -1757,42 +2375,37 @@ class CameraStream:
                 if self._reset_requested.is_set():
                     self._apply_reset()
                 started = time.monotonic()
+                self.iterations = getattr(self, "iterations", 0) + 1
                 image = self._camera.capture_array()
                 if self.rotation:
                     image = cv2.rotate(image, rotate_codes[self.rotation])
+                _t_capture = time.perf_counter()
                 if self.semantic_tracker is not None:
-                    local_bbox, local_priority = detect_priority_target(image, cv2)
-                    now = time.monotonic()
-                    if local_bbox is None:
-                        self._local_candidate_since = 0.0
-                        self._last_local_bbox = None
+                    # Page hypothesis, refreshed on an interval because the salient
+                    # model costs about 5.5 s while every other stage totals ~0.6 s.
+                    # getattr rather than __init__ state so a tracker built through
+                    # __new__ in tests still works.
+                    # The expensive steps now run on a worker thread; see
+                    # _detection_loop. Measured, running PP-OCR (0.3 s) and the tracker
+                    # update (0.28 s) here, plus the stalls around them, held the loop at
+                    # 3.0 iterations a second while its own work is about 75 ms -- and
+                    # clients received exactly what the loop published (3.00/s against
+                    # 2.89/s), so the preview was limited here and not by the network.
+                    # The frame is handed over and the last result is read back.
+                    self._submit_detection(image)
+                    detected = self._detected()
+                    if detected is None:
+                        local_bbox = None
+                        local_priority = "search"
+                        candidate_stable = False
+                        semantic_bbox = None
                     else:
-                        same_candidate = (
-                            self._last_local_bbox is not None
-                            and bbox_intersection_over_union(self._last_local_bbox, local_bbox) >= 0.55
-                        )
-                        if not same_candidate or self._local_candidate_since == 0.0:
-                            self._local_candidate_since = now
-                        self._last_local_bbox = local_bbox
-                    candidate_stable = local_candidate_is_stable(
-                        self._local_candidate_since,
-                        now,
-                    )
-                    if self.semantic_tracker.help_requested and candidate_stable:
-                        self.semantic_tracker.resume_after_stable_local_candidate()
-                        self._local_candidate_since = 0.0
-                    semantic_bbox = self.semantic_tracker.update(
-                        image,
-                        cv2,
-                        local_bbox=local_bbox,
-                        allow_reacquire=(
-                            candidate_stable and not self.semantic_tracker.help_requested
-                        ),
-                    )
+                        local_bbox, local_priority, candidate_stable, semantic_bbox = detected
                     selected_bbox, priority = choose_tracking_target(
                         local_bbox,
                         local_priority,
                         semantic_bbox,
+                        local_stable=candidate_stable,
                     )
                     if selected_bbox is None:
                         priority = self.semantic_tracker.status
@@ -1864,12 +2477,42 @@ class CameraStream:
                         alignment["salient_third"] = profile.index(max(profile))
                 if self.j1_follower is not None:
                     self.j1_follower.update(alignment)
+                _t_detect = time.perf_counter()
                 ok, encoded = cv2.imencode(".jpg", image, [cv2.IMWRITE_JPEG_QUALITY, self.quality])
                 if not ok:
                     raise RuntimeError("camera JPEG encoding failed")
+                _t_encode = time.perf_counter()
+                # Stage timing, published so a slow preview can be diagnosed from the
+                # alignment instead of guessed at.
+                alignment["stage_ms"] = (
+                    round((_t_capture - started) * 1000.0),
+                    round((_t_detect - _t_capture) * 1000.0),
+                    round((_t_encode - _t_detect) * 1000.0),
+                    round((_t_encode - started) * 1000.0),
+                )
+                # The true iteration period. The three stages above exclude the publish
+                # and the throttle sleep, so without this the difference between them
+                # and the observed frame rate cannot be attributed.
+                _previous_started = getattr(self, "_last_loop_started", None)
+                alignment["loop_ms"] = (
+                    None if _previous_started is None
+                    else round((started - _previous_started) * 1000.0)
+                )
+                alignment["frames_published"] = getattr(self, "frames_published", 0)
+                alignment["iterations"] = getattr(self, "iterations", 0)
+                # Long-run health: the page-hypothesis worker died once after about an
+                # hour and froze the preview, so how often it has had to be replaced is
+                # worth watching rather than discovering as a stuck picture.
+                hypothesis_now = getattr(self, "_page_hypothesis", None)
+                if hypothesis_now is not None:
+                    alignment["page_hypothesis_restarts"] = getattr(
+                        hypothesis_now, "restarts", 0
+                    )
+                self._last_loop_started = started
                 with self.condition:
                     self.frame = encoded.tobytes()
                     self.alignment = alignment
+                    self.frames_published = getattr(self, "frames_published", 0) + 1
                     self.condition.notify_all()
                 self._stopping.wait(max(0.0, delay - (time.monotonic() - started)))
         except Exception as error:  # Surface capture failures to browser clients.
@@ -1897,6 +2540,13 @@ class CameraStream:
             self._thread.join(timeout=3.0)
         if self._camera is not None:
             self._camera.stop()
+        worker = getattr(self, "_detect_thread", None)
+        if worker is not None:
+            self._detection_wake.set()
+            worker.join(timeout=3.0)
+        hypothesis = getattr(self, "_page_hypothesis", None)
+        if hypothesis is not None:
+            hypothesis.stop()
 
 
 def make_handler(stream: CameraStream) -> type[BaseHTTPRequestHandler]:
@@ -2066,7 +2716,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="use configured cloud vision once to select a picture-book page, then track locally",
     )
-    parser.add_argument("--opencv-tracker", choices=("kcf", "csrt"), default="kcf")
+    parser.add_argument("--opencv-tracker", choices=("mil", "kcf", "csrt"), default="mil")
     parser.add_argument("--semantic-reacquire-seconds", type=float, default=8.0)
     parser.add_argument(
         "--local-text-detection",
@@ -2097,8 +2747,12 @@ def main() -> None:
     if args.execute_j1:
         if args.j1_gear_ratio is None or args.j1_positive_camera_direction is None or args.j1_speed_rpm is None:
             raise SystemExit(
-                "--execute-j1 requires --j1-gear-ratio, --j1-positive-camera-direction and --j1-speed-rpm"
+                "--execute-j1 requires --j1-gear-ratio --j1-positive-camera-direction and --j1-speed-rpm"
             )
+        # Check the bus before building the follower: its constructor reads the encoder,
+        # and without this the only symptom is "OSError: [Errno 100] Network is down"
+        # from deep inside the transport, which says nothing about the cause.
+        require_can_interface(args.can_interface)
         follower = RealtimeJ1Follower(
             interface=args.can_interface,
             node_id=args.j1_node_id,

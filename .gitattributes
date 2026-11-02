@@ -1,0 +1,2 @@
+# Shell 脚本在 Windows（core.autocrlf=true）上也必须是 LF，否则 bash 会因 \r 报错（含 .claude/hooks）
+*.sh text eol=lf

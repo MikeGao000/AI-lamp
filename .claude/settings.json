@@ -50,5 +50,33 @@
       "Read(./.env)",
       "Edit(./.env)"
     ]
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume",
+        "hooks": [
+          {
+            "type": "command",
+            "shell": "bash",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/session_start_pull.sh\"",
+            "timeout": 30,
+            "statusMessage": "同步 develop..."
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "shell": "bash",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/stop_sync_check.sh\"",
+            "timeout": 15
+          }
+        ]
+      }
+    ]
   }
 }

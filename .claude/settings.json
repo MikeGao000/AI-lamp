@@ -1,0 +1,54 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -m unittest:*)",
+      "Bash(python run_full_test_suite.py:*)",
+      "Bash(python simulate_system.py:*)",
+      "Bash(python3 -m unittest:*)",
+      "Bash(python3 run_full_test_suite.py:*)",
+      "Bash(python3 simulate_system.py:*)",
+      "Bash(py -m unittest:*)",
+      "Bash(py run_full_test_suite.py:*)",
+      "Bash(py simulate_system.py:*)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git branch:*)",
+      "Bash(git fetch:*)"
+    ],
+    "ask": [
+      "Bash(python run_mks_single_axis_motion.py:*)",
+      "Bash(python3 run_mks_single_axis_motion.py:*)",
+      "Bash(py run_mks_single_axis_motion.py:*)",
+      "Bash(python bench_motor.py:*)",
+      "Bash(python3 bench_motor.py:*)",
+      "Bash(py bench_motor.py:*)",
+      "Bash(python measure_axis_direction.py:*)",
+      "Bash(python3 measure_axis_direction.py:*)",
+      "Bash(py measure_axis_direction.py:*)",
+      "Bash(python set_aim_zero.py:*)",
+      "Bash(python3 set_aim_zero.py:*)",
+      "Bash(py set_aim_zero.py:*)",
+      "Bash(python bench_loop_cost.py:*)",
+      "Bash(python3 bench_loop_cost.py:*)",
+      "Bash(py bench_loop_cost.py:*)",
+      "Bash(python collect_book_dataset.py:*)",
+      "Bash(python3 collect_book_dataset.py:*)",
+      "Bash(py collect_book_dataset.py:*)",
+      "Bash(*--execute*)",
+      "Bash(git push:*)",
+      "Bash(ssh:*)",
+      "Bash(scp:*)"
+    ],
+    "deny": [
+      "Bash(cansend:*)",
+      "Bash(cangen:*)",
+      "Bash(git push --force:*)",
+      "Bash(git push -f:*)",
+      "Bash(git reset --hard:*)",
+      "Bash(git clean:*)",
+      "Read(./.env)",
+      "Edit(./.env)"
+    ]
+  }
+}
